@@ -4,6 +4,6 @@
   "path": "/home/issac/.local/bin/fgvk-mpv-launch.py",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://<EXTENSION_ID>/"
+    "chrome-extension://jggfcgmdjhdeokfjlmnfdmnekodggdjc/"
   ]
 }
