@@ -26,6 +26,15 @@ def build_argv(profile, url):
     return [MPV, *MPV_ARGS, url]
 
 
+def is_valid_video_url(url):
+    """Mirror of url-utils.js isYouTubeWatchUrl（watch / embed / youtu.be）。"""
+    return (
+        url.startswith("https://www.youtube.com/watch?")
+        or url.startswith("https://www.youtube.com/embed/")
+        or url.startswith("https://youtu.be/")
+    )
+
+
 def read_message():
     """讀 Native Messaging 訊息（4-byte little-endian 長度 + JSON）。"""
     raw = sys.stdin.buffer.read(4)
@@ -64,9 +73,9 @@ def main():
     mult = msg.get("multiplier", 0)
     profile = multiplier_to_profile(mult)
     if profile is None:
-        write_message({"ok": False, "error": f"倍率 {mult} 不支援（只接受 2/3/4）"})
+        write_message({"ok": False, "error": f"倍率 {mult} 不支援（只接受 2/3/4/10）"})
         return 1
-    if not url.startswith("https://www.youtube.com/watch?v="):
+    if not is_valid_video_url(url):
         write_message({"ok": False, "error": "不是 YouTube 影片網址"})
         return 1
     try:
@@ -86,6 +95,10 @@ if __name__ == "__main__":
         assert multiplier_to_profile(10) == "10x FG / 100%"
         assert multiplier_to_profile(5) is None
         assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "https://x"]
+        assert is_valid_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        assert is_valid_video_url("https://youtu.be/dQw4w9WgXcQ")
+        assert is_valid_video_url("https://www.youtube.com/embed/dQw4w9WgXcQ")
+        assert not is_valid_video_url("https://example.com/watch?v=x")
         print("host selftest passed")
         sys.exit(0)
     sys.exit(main())
