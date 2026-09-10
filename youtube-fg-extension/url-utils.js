@@ -13,7 +13,7 @@ function isYouTubeWatchUrl(url) {
 
 function multiplierToProfile(mult) {
   const n = Number(mult);
-  if (n !== 2 && n !== 3 && n !== 4) return null;
+  if (![2, 3, 4, 10].includes(n)) return null;
   return `${n}x FG / 100%`;
 }
 

@@ -17,6 +17,7 @@ assert.strictEqual(isYouTubeWatchUrl("not a url"), false);
 assert.strictEqual(multiplierToProfile(2), "2x FG / 100%");
 assert.strictEqual(multiplierToProfile(3), "3x FG / 100%");
 assert.strictEqual(multiplierToProfile(4), "4x FG / 100%");
+assert.strictEqual(multiplierToProfile(10), "10x FG / 100%");
 assert.strictEqual(multiplierToProfile(5), null);
 assert.strictEqual(multiplierToProfile("x"), null);
 

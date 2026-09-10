@@ -8,7 +8,7 @@ import sys
 
 MPV = "mpv"
 MPV_ARGS = ["--vo=gpu", "--gpu-api=vulkan"]
-ALLOWED_MULT = (2, 3, 4)
+ALLOWED_MULT = (2, 3, 4, 10)
 
 
 def multiplier_to_profile(mult):
@@ -80,6 +80,7 @@ if __name__ == "__main__":
         assert multiplier_to_profile(2) == "2x FG / 100%"
         assert multiplier_to_profile(3) == "3x FG / 100%"
         assert multiplier_to_profile(4) == "4x FG / 100%"
+        assert multiplier_to_profile(10) == "10x FG / 100%"
         assert multiplier_to_profile(5) is None
         assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "https://x"]
         print("host selftest passed")
