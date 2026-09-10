@@ -1,6 +1,6 @@
 # fgvk
 
-fg（frame generation）專案：**影片的即時插幀**（本機個人用）。機器：Ubuntu 26.04 / GNOME Wayland / 2× AMD R9700（各帶一屏 3440×1440）/ lsfg-vk 2.0.0 已裝（shader container 已恢復）。音頻路徑不動（來源播放器照舊播、工具靜音）。
+fg（frame generation）專案：**影片的即時插幀**（本機個人用）。機器：Ubuntu 26.04 / GNOME Wayland / 2× AMD R9700（各帶一屏 3440×1440）/ lsfg-vk 2.0.0 已裝（shader container 已恢復）。音頻：各路線不同（screen-fg = 來源照舊播＋工具靜音；extension = 來源 tab 靜音＋mpv 播音，見各自 AGENTS.md）。
 
 ## 現況（FG 路線結論）
 
