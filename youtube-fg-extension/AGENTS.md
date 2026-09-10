@@ -10,7 +10,8 @@ popup 選 2x/3x/4x/10x → `chrome.runtime.connectNative("com.fgvk.host")` → h
 
 | 檔案 | 用途 |
 |------|------|
-| `manifest.json` | MV3；`nativeMessaging` 權限 |
+| `manifest.json` | MV3；`tabs` + `nativeMessaging` 權限；`icons` + `action.default_icon`（像素小鴨） |
+| `icons/` | extension 圖示（像素小鴨，16/32/48/128，透明背景） |
 | `popup.html` / `popup.js` | 2x/3x/4x/10x 按鈕；連 native host；顯示最後一擊成功/失敗 |
 | `host/fgvk-mpv-launch.py` | native messaging host（讀 stdio length-prefixed message → `launch` 起 mpv → 回 status JSON）。`--selftest` 可離線驗 |
 | `host/com.fgvk.host.json` | host manifest（`path` 指向 `~/.local/bin/fgvk-mpv-launch.py`；`allowed_origins` = extension ID） |
