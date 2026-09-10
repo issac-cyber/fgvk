@@ -16,6 +16,7 @@ struct Config {
     int displayIndex = 0; // which display the FG window covers
     uint32_t contentFpsCap = 60;
     std::string captureMode = "window"; // "window"（spec 預設：picker 選視窗）| "monitor"（全螢幕 monitor 捕捉、無 picker）
+    int captureMonitor = 0; // 抓第幾條 stream（monitor 模式下 portal 回多條 streams；0 = 第一條）
 };
 
 // 環境變數的注入表示（可測性：不直接碰 getenv）。

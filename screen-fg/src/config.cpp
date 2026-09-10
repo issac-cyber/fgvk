@@ -68,6 +68,8 @@ Config parseConfig(const std::string& text, Config def) {
                 if (v != "window" && v != "monitor")
                     throw std::invalid_argument("window|monitor");
                 c.captureMode = v;
+            } else if (key == "capture_monitor") {
+                c.captureMonitor = std::stoi(val);
             }
             // unknown keys: ignored (forward compatibility)
         } catch (const std::invalid_argument&) {
@@ -85,6 +87,8 @@ ResolvedConfig resolveConfig(const std::string& tomlText, const EnvMap& envMap) 
         rc.config.hud = (it->second[0] == '1');
     if (auto it = envMap.find("SCREENFG_DISPLAY"); it != envMap.end() && !it->second.empty())
         rc.config.displayIndex = std::atoi(it->second.c_str());
+    if (auto it = envMap.find("SCREENFG_CAPTURE_MONITOR"); it != envMap.end() && !it->second.empty())
+        rc.config.captureMonitor = std::atoi(it->second.c_str());
     if (auto it = envMap.find("SCREENFG_STATE"); it != envMap.end())
         rc.paused = (it->second == ReexecEnv::Paused);
     return rc;
@@ -104,7 +108,7 @@ ResolvedConfig loadConfig(const std::string& path) {
         text = ss.str();
     }
     EnvMap env;
-    const char* keys[] = {"SCREENFG_HUD", "SCREENFG_DISPLAY", "SCREENFG_STATE"};
+    const char* keys[] = {"SCREENFG_HUD", "SCREENFG_DISPLAY", "SCREENFG_STATE", "SCREENFG_CAPTURE_MONITOR"};
     for (const char* k : keys)
         if (const char* v = std::getenv(k))
             env[k] = v;

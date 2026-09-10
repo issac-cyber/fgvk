@@ -4,9 +4,11 @@
 #include <linux/dma-buf.h>
 #include <poll.h>
 #include <spa/buffer/buffer.h>
+#include <spa/param/format-utils.h>
 #include <spa/param/param.h>
 #include <spa/param/video/format-utils.h>
 #include <spa/param/video/raw.h>
+#include <spa/pod/builder.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -54,6 +56,7 @@ struct Capture::Impl {
     // ---- PipeWire 1.6.2 ----
     int pwFd = -1;
     int streamNodeId = -1; // Start 回來的 capture source node ID（客戶端要 target 它）
+    int streamIndex = 0; // 抓第幾條 stream（monitor 模式下 portal 回多條 streams）
     struct pw_main_loop* ml = nullptr;
     struct pw_context* ctx = nullptr;
     struct pw_core* core = nullptr;
@@ -259,11 +262,12 @@ void Capture::onProcess(void* data) {
                     case SPA_DATA_MemFd:
                     case SPA_DATA_DmaBuf:
                         if (d->type == SPA_DATA_DmaBuf && d->fd >= 0) {
-                            struct dma_buf_sync sync{0}; // flags=0：讀用，無需同步
+                            struct dma_buf_sync sync{0};
+                            sync.flags = DMA_BUF_SYNC_READ; // START|READ：要求 GPU flush、讀到新幀（本來 flags=0 是 no-op → 凍結）
                             (void) ioctl(d->fd, DMA_BUF_IOCTL_SYNC, &sync);
                         }
                         if (d->fd >= 0 && d->maxsize > 0) {
-                            void* m = mmap(nullptr, d->maxsize, PROT_READ, MAP_SHARED, d->fd, 0);
+                            void* m = mmap(nullptr, d->maxsize, PROT_READ, MAP_SHARED, d->fd, d->mapoffset);
                             if (m != MAP_FAILED) {
                                 mapped = m;
                                 src = (uint8_t*) m;
@@ -289,6 +293,11 @@ void Capture::onProcess(void* data) {
                             im->q.pop_front(); // 落後就丟最舊（保低延遲）
                         im->q.push_back(std::move(blk));
                     }
+                }
+                if (d->type == SPA_DATA_DmaBuf && d->fd >= 0) {
+                    struct dma_buf_sync sync{0};
+                    sync.flags = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END; // END|READ：收尾同步
+                    (void) ioctl(d->fd, DMA_BUF_IOCTL_SYNC, &sync);
                 }
                 if (mapped)
                     munmap(mapped, d->maxsize);
@@ -374,9 +383,13 @@ void Capture::onSignal(GDBusConnection*, const char*, const char* objectPath,
                 GVariant* val = g_variant_get_child_value(entry, 1); // v
                 GVariant* inner = g_variant_get_child_value(val, 0); // 真正的值
                 if (std::string(keyStr) == "streams") {
-                    // streams = a(ua{sv})；第 0 個元素 = (u node_id, a{sv} meta)
-                    if (g_variant_n_children(inner) > 0) {
-                        GVariant* elem = g_variant_get_child_value(inner, 0); // (u, a{sv})
+                    // streams = a(ua{sv})；用 capture_monitor 選第幾條（越界落回第 0 條）
+                    gsize ns = g_variant_n_children(inner);
+                    if (ns > 0) {
+                        int idx = im->streamIndex;
+                        if (idx < 0 || (gsize)idx >= ns)
+                            idx = 0;
+                        GVariant* elem = g_variant_get_child_value(inner, (gsize)idx); // (u, a{sv})
                         GVariant* nidVar = g_variant_get_child_value(elem, 0); // u
                         if (g_variant_is_of_type(nidVar, G_VARIANT_TYPE_UINT32))
                             it->second.streamNodeId = (int) g_variant_get_uint32(nidVar);
@@ -486,6 +499,8 @@ Capture::Capture() : impl_(new Impl) {}
 Capture::~Capture() { stop(); }
 
 void Capture::setMonitorMode(bool m) { impl_->monitorMode = m; }
+
+void Capture::setStreamIndex(int i) { impl_->streamIndex = i; }
 
 void Capture::start() {
     auto& im = *impl_;
@@ -635,9 +650,17 @@ void Capture::start() {
     // PW_ID_ANY（fd 連線是受限連線、只暴露該 source，ANY 找不到 → "no target node available"）。
     int targetId = (im.streamNodeId != -1) ? im.streamNodeId : PW_ID_ANY;
     fprintf(stderr, "[screen-fg] stream target node=%d\n", targetId);
-    // 本機不當 driver（source 是 node.driver 的 clock source、會自己 push 幀）。
-    // 加 DRIVER flag 會造成兩個 driver 衝突、兩節點都 suspended。用 NONE。
-    if (pw_stream_connect(im.stream, PW_DIRECTION_INPUT, targetId, PW_STREAM_FLAG_NONE, nullptr, 0) < 0)
+    // 主動遞 EnumFormat 過濾器（raw video）——這是觸發 mutter screencast source 開始格式
+    // 協商的關鍵：沒遞 filter，source 不會推格式（onParam 永不觸發）→ stream 卡 PAUSED、fps=0。
+    uint8_t podBuf[1024];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(podBuf, sizeof(podBuf));
+    const struct spa_pod* params[1];
+    params[0] = (const struct spa_pod*) spa_pod_builder_add_object(&b,
+        SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+        SPA_FORMAT_mediaType,    SPA_POD_Id(SPA_MEDIA_TYPE_video),
+        SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw));
+    if (pw_stream_connect(im.stream, PW_DIRECTION_INPUT, targetId,
+            PW_STREAM_FLAG_AUTOCONNECT, params, 1) < 0)
         throw std::runtime_error("pw_stream_connect 失敗");
     // 主迴圈跑在獨立交替線程（阻塞 run）
     im.loopThread = std::thread([ml = im.ml] { pw_main_loop_run(ml); });

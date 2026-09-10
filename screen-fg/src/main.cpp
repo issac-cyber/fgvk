@@ -201,6 +201,7 @@ int main(int argc, char** argv) {
     else {
         auto cap = std::make_unique<Capture>();
         cap->setMonitorMode(cfg.captureMode == "monitor");
+        cap->setStreamIndex(cfg.captureMonitor);
         source = std::move(cap);
     }
     try {
