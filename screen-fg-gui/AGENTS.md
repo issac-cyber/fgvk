@@ -1,26 +1,52 @@
 # screen-fg-gui
 
-`screen-fg` 的 Linux 桌面 GUI 控制器（獨立程式，與 CLI 並存）。依 `../specs/screen-fg-gui/spec.md` 建置。
+`screen-fg` 的 Linux 桌面 GUI 控制器（獨立程式，與 CLI 並存）。依 `../specs/screen-fg-gui/spec.md` 建置（4 個 resolved ticket：選窗 / toolkit / 控制通道 / MVP 界線）。
 
 ## Scope
 
-GTK4（C++ 走 gtkmm-4.0；本機 libadwaita 無 C++ binding 故未連結，GNOME 預設 GTK4 主題即 Adwaita 故外觀相同）單一 binary `screen-fg-gui`：`fork`+`exec` 啟動 `screen-fg` 子程序、stdio 控制（命令走子程序 stdin、status JSON 走 stdout）、主窗戶提供 啟動/停止、狀態顯示（FPS/倍數/layer/狀態）、選窗（GUI 按鈕觸發 screen-fg 自己的 XDG portal picker）、執行中設定（HUD on/off、暫停/恢復）。不改 `screen-fg` 的 LOCKED v1.0 管線。
+GTK4（C++ 走 gtkmm-4.0；本機 libadwaita 無 C++ binding 故未連結，GNOME 預設 GTK4 主題即 Adwaita 故外觀相同）單一 binary `screen-fg-gui`：`fork`+`exec` 啟動 `screen-fg` 子程序、stdio 控制（命令走子程序 stdin、status JSON 走 stdout）、主窗戶提供 啟動/停止、狀態顯示（FPS/倍數/layer/狀態）、選窗（GUI 按鈕觸發 screen-fg 自己的 XDG portal picker）、執行中設定（HUD on/off、暫停/恢復）。不改 `screen-fg` 的 LOCKED v1.0 管線。App ID `com.issac.screenfg-gui`；主窗 560×640。
 
 ## Key files
 
-- `CMakeLists.txt` — 建置（需 `libgtkmm-4.0-dev`；**不**需 libadwaita，無 C++ binding；`-I <fgvk>/` 引用 `shared/`；含純 `screen-fg-gui-tests` target）
-- `src/main.cpp` — GTK 主窗戶（純 gtkmm：`Gtk::Application` subclass + `Gtk::Window`）+ binary 自動偵測；命令/狀態詞彙走 `shared/protocol.hpp`
-- `src/process.{hpp,cpp}` — 子程序控制 **transport**（fork+exec、stdin/stdout/stderr 管線、寫命令、waitpid）；**解碼**（行 → status/exit）交給 `shared/protocol.hpp` 的純 `parse`
-- `shared/protocol.hpp`（兄弟目錄 `../shared/`）— stdio 控制協議**單一來源**（與 `screen-fg` 共用）：`Message`、詞彙常數、純 emit/parse + 欄位存在性檢查
+- `CMakeLists.txt` — 建置（需 `libgtkmm-4.0-dev`；**不**需 libadwaita，無 C++ binding；`-I <fgvk>/` 引用 `shared/`；含純 `screen-fg-gui-tests` target，ctest 目標名 `unit`）
+- `src/main.cpp` — `GuiApp`（`Gtk::Application` subclass；`on_activate` 建 `MainWindow` + `add_window`）＋`MainWindow`（純 gtkmm `Gtk::Window`）＋binary 自動偵測；layout：binary 路徑 Entry、啟動/停止鈕、狀態列（FPS/mult/layer/state）、暫停/恢復鈕（tooltip 警告重新選窗）、HUD switch、log TextView（ScrolledWindow 包住）；命令/狀態詞彙走 `shared/protocol.hpp`；status/exit/log 回調全經 `postIdle` 排回 GLib 主執行緒
+- `src/process.{hpp,cpp}` — 子程序控制 **transport**（fork+exec、stdin/stdout/stderr 三條管線、寫命令、waitpid、reader/log 兩線程、destructor bounded 清理）；**解碼**（行 → status/exit）交給 `shared/protocol.hpp` 的純 `parse`；本模組只負責 IO + 回調
+- `shared/protocol.hpp`（兄弟目錄 `../shared/`）— stdio 控制協議**單一來源**（與 `screen-fg` 共用）：`Message`、詞彙常數、`kVersion`、純 emit/parse + 欄位存在性檢查
 - `tests/test_protocol_decoder.cpp` — 純 ProtocolDecoder 測試（不 link gtkmm）
-- `screen-fg-gui.desktop` — 桌面圖示
+- `screen-fg-gui.desktop` — 桌面圖示（`Name[zh_TW]=screen-fg 插帧控制`、`Exec=screen-fg-gui`、`Icon=video-display`、`Categories=Video;`）
 
 ## 操作
 
 - 建置：`cmake -B build && cmake --build build`
 - 跑純 ProtocolDecoder 測試：`./build/screen-fg-gui-tests`（不 link gtkmm；依賴 `../shared/`）
-- 執行：`./build/screen-fg-gui`（自動找 `screen-fg` binary：`$SCREENFG_BIN` → `../screen-fg/build/screen-fg` → PATH）
+- 執行：`./build/screen-fg-gui`（自動找 `screen-fg` binary，順序見下；全找不到 → Entry 顯示「（找不到，請手動填路徑）」、啟動鈕被擋）
 - 桌面圖示：把 `screen-fg-gui` 裝到 PATH 後，`cp screen-fg-gui.desktop ~/.local/share/applications/`
+
+### binary 自動偵測（`findBinary` 順序）
+
+1. `$SCREENFG_BIN`（env，路徑存在即採用）
+2. `build/screen-fg`（CWD 相對）
+3. `../screen-fg/build/screen-fg`
+4. `/usr/local/bin/screen-fg`
+5. `<screen-fg-gui 執行檔目錄>/../screen-fg/build/screen-fg`
+6. 掃描 `PATH` 每一段（`<dir>/screen-fg`）
+
+## 執行期行為（main.cpp）
+
+- 啟動/停止鈕狀態機：未 running → `proc_.start(bin, {})`（鈕變「停止」、state 顯示 "starting…"）；running → `proc_.quit()`（送 quit 命令、退出由 exit 回調**異步**處理）
+- state 標籤：status 的 `state`（running/paused/exiting）→ 退出時 code 0 = 「已停止」、非 0 = 「錯誤結束 (N)」
+- 暫停/恢復鈕：標籤跟 state（running→「暫停」、paused→「恢復」）；按下發 pause/resume 命令；log + tooltip 警告：**暫停會重新啟動捕捉（真實捕捉模式下會重跑選窗）**
+- HUD switch → `hud 1|0` 命令（立即生效、不重啟）
+- log 區：子程序 stderr 逐行（logLoop）+ GUI 端事件（啟動/停止/退出/暫停警告）
+- 狀態列由 `onStatus` 更新（FPS / 倍數 / layer on-off / state + 暫停鈕標籤）
+
+## 子程序控制細節（process.cpp）
+
+- `start()`：三條 pipe（stdin/stdout/stderr）+ `fork`；子 `dup2` + `execv`（失敗 `_exit(127)`）；父留 `stdinW_`/`stdoutR_`/`stderrR_` + 起 `readerLoop` + `logLoop` 兩線程；thread 建立失敗 → `SIGKILL` 子程序 + 清 fd（不 leak）
+- `readerLoop`：`poll`（100ms 超時）+ 8KB chunked `read` + `pending` buffer 抽行（去尾 `\r`）→ 純 `proto::parse`（nullopt 跳過）→ Status → `postIdle` 回 GLib 主執行緒回調；**EOF** → `waitExitCode`（WIFEXITED → exit status；WIFSIGNALED → 128+sig）＋補 exit 回調（子被殺、沒發 exit JSON 時）
+- `logLoop`：同樣模式，stderr → `logCb`
+- `sendCommand`：mutex 保護、寫 `cmd + "\n"`（EINTR continue / EPIPE 放棄）
+- destructor：若 running 先送 quit → `stopping_=true`（reader ~100ms 內退出、bounded join、不卡 app 退出）→ 關 stdin（子程序 EOF）→ join 兩線程 → `waitpid(WNOHANG)`；子程序還活就 `kill(SIGTERM)` 確保收掉（否則 orphan 給 init）
 
 ## 控制協議（與 screen-fg 的 stdio 通道）
 
@@ -33,9 +59,9 @@ GTK4（C++ 走 gtkmm-4.0；本機 libadwaita 無 C++ binding 故未連結，GNOM
 
 ## 依賴
 
-- 需要 `screen-fg` binary（同層 `../screen-fg/build/screen-fg` 或 `$SCREENFG_BIN`）
+- 需要 `screen-fg` binary（同層 `../screen-fg/build/screen-fg` 或 `$SCREENFG_BIN`；完整順序見上）
 - 需要 `../shared/`（純協議模組，與 `screen-fg` 共用；`-I <fgvk>/` 引用）
-- screen-fg 端有對應的 additive 改動：event loop 讀 stdin、發 status/exit JSON、log 走 stderr、`--config` arg
+- screen-fg 端有對應的 additive 改動：event loop 讀 stdin、發 status/exit JSON、log 走 stderr、`--config` arg（不碰 LOCKED v1.0 管線）
 
 ## 陷阱（本機實測，gtkmm 4.20 / Ubuntu 26.04）
 

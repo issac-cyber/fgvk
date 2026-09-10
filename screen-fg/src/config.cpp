@@ -61,6 +61,13 @@ Config parseConfig(const std::string& text, Config def) {
                 c.displayIndex = std::stoi(val);
             } else if (key == "content_fps_cap") {
                 c.contentFpsCap = static_cast<uint32_t>(std::stoul(val));
+            } else if (key == "capture_mode") {
+                std::string v = val;
+                if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+                    v = v.substr(1, v.size() - 2); // 容錯：引號/未引號皆可
+                if (v != "window" && v != "monitor")
+                    throw std::invalid_argument("window|monitor");
+                c.captureMode = v;
             }
             // unknown keys: ignored (forward compatibility)
         } catch (const std::invalid_argument&) {

@@ -38,10 +38,11 @@ void SyntheticSource::stop() {
     // 無需清理
 }
 
-// 產生一帧「保證與上一帧不同」的 BGRA 畫面：
+// 產生一帧 raw 與上一帧不同的 BGRA 畫面：
 //  - 背景：水平漸變（B 通道依 x 變化）
-//  - 移動方塊：x 位置 = (frameNo * 8) % width，顏色隨 frameNo 變化
-// 每帧方塊位置 + 顏色都變 → dedup 的 32×32 MAD 必超過門檻 → 判定「不同」→ 呈現。
+//  - 移動方塊：16×16，x 位置 = (frameNo * 8) % width，顏色隨 frameNo 變化
+// 注意：方塊面積 ~0.03% 全幀，32×32 格化後 MAD ≈ 0.001 < 預設門檻 3.0
+// → dedup 判定「相同」、只放行第一幀（第一幀永遠 true）。管線 + layer 由第一幀觸發。
 void SyntheticSource::makeFrame() {
     const uint32_t w = w_, h = h_;
     const uint8_t* base = buf_->data();

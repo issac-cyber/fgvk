@@ -83,6 +83,24 @@ static void test_config() {
     // content_fps_cap
     Config c5 = parseConfig("content_fps_cap = 30\n", d);
     CHECK_EQ(c5.contentFpsCap, 30u);
+
+    // capture_mode：預設 window；monitor 可解析；壞值 throw
+    CHECK_EQ(d.captureMode, std::string("window"));
+    CHECK_EQ(parseConfig("", d).captureMode, std::string("window"));
+    Config cm1 = parseConfig("capture_mode = monitor\n", d);
+    CHECK_EQ(cm1.captureMode, std::string("monitor"));
+    Config cm2 = parseConfig("capture_mode = window\n", d);
+    CHECK_EQ(cm2.captureMode, std::string("window"));
+    // 容錯：引號形式亦可
+    Config cm3 = parseConfig("capture_mode = \"monitor\"\n", d);
+    CHECK_EQ(cm3.captureMode, std::string("monitor"));
+    threw = false;
+    try {
+        parseConfig("capture_mode = bogus\n", d);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    CHECK(threw);
 }
 
 static Registrar reg("config", test_config);

@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fgvk 專案運行原理詳解</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #171a21;
+    --card2: #1d212b;
+    --text: #e8eaf0;
+    --dim: #9aa3b5;
+    --blue: #4da3ff;
+    --orange: #ff9f43;
+    --green: #2ecc71;
+    --purple: #b388ff;
+    --red: #ff6b6b;
+    --yellow: #ffd166;
+    --code-bg: #232834;
+    --border: #2a3040;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif;
+    line-height: 1.7;
+  }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.88em;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 12px 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  header {
+    padding: 40px 24px 24px;
+    text-align: center;
+    background: linear-gradient(180deg, #1a1f2b 0%, var(--bg) 100%);
+  }
+  header h1 { margin: 0 0 8px; font-size: 2rem; }
+  header .sub { color: var(--dim); font-size: 1.05rem; }
+  .badges { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .badge {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 0.85rem;
+    color: var(--dim);
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    gap: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } nav.toc { position: static !important; } }
+  nav.toc {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+  nav.toc h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 0 0 10px; }
+  nav.toc a {
+    display: block;
+    color: var(--dim);
+    text-decoration: none;
+    padding: 5px 8px;
+    border-radius: 6px;
+    font-size: 0.92rem;
+  }
+  nav.toc a:hover { background: var(--card2); color: var(--text); }
+  main { min-width: 0; }
+  section.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--dim);
+    border-radius: 10px;
+    padding: 22px 26px;
+    margin-bottom: 22px;
+  }
+  section.card h2 { margin: 0 0 14px; font-size: 1.45rem; }
+  section.card h3 { margin: 22px 0 10px; font-size: 1.12rem; color: var(--yellow); }
+  section.blue { border-left-color: var(--blue); }
+  section.orange { border-left-color: var(--orange); }
+  section.green { border-left-color: var(--green); }
+  section.purple { border-left-color: var(--purple); }
+  section.red { border-left-color: var(--red); }
+  section.yellow { border-left-color: var(--yellow); }
+  .tldr {
+    background: var(--card2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 0.95rem;
+  }
+  .tldr::before { content: "TL;DR ｜ "; font-weight: 700; color: var(--yellow); }
+  .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  .tag.blue { background: rgba(77,163,255,.15); color: var(--blue); }
+  .tag.orange { background: rgba(255,159,67,.15); color: var(--orange); }
+  .tag.green { background: rgba(46,204,113,.15); color: var(--green); }
+  .tag.purple { background: rgba(179,136,255,.15); color: var(--purple); }
+  .tag.red { background: rgba(255,107,107,.15); color: var(--red); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.92rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--card2); color: var(--dim); font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  details {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 10px 0;
+  }
+  details summary { cursor: pointer; font-weight: 600; color: var(--blue); }
+  details[open] summary { margin-bottom: 10px; }
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: stretch;
+    margin: 18px 0;
+  }
+  .flow .node {
+    flex: 1 1 150px;
+    min-width: 150px;
+    background: var(--card2);
+    border: 2px solid;
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+  }
+  .flow .node b { display: block; font-size: 1rem; margin-bottom: 4px; }
+  .flow .node span { font-size: 0.82rem; color: var(--dim); }
+  .flow .arrow {
+    display: flex;
+    align-items: center;
+    font-size: 1.6rem;
+    color: var(--dim);
+    padding: 0 2px;
+  }
+  .n-capture { border-color: var(--blue); } .n-capture b { color: var(--blue); }
+  .n-dedup { border-color: var(--orange); } .n-dedup b { color: var(--orange); }
+  .n-present { border-color: var(--green); } .n-present b { color: var(--green); }
+  .n-layer { border-color: var(--purple); } .n-layer b { color: var(--purple); }
+  .n-display { border-color: var(--yellow); } .n-display b { color: var(--yellow); }
+  .note {
+    border-left: 4px solid var(--yellow);
+    background: rgba(255,209,102,.07);
+    padding: 10px 14px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 0.93rem;
+  }
+  .warn {
+    border-left: 4px solid var(--red);
+    background: rgba(255,107,107,.07);
+    padding: 10px 14px;
+    border-radius: 0 8px 8px 0;
+    margin: 12px 0;
+    font-size: 0.93rem;
+  }
+  .step { display: flex; gap: 14px; margin: 10px 0; }
+  .step .num {
+    flex: 0 0 auto;
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: var(--card2);
+    border: 2px solid var(--yellow);
+    color: var(--yellow);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700;
+  }
+  .step .txt { flex: 1; }
+  kbd {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-size: 0.85em;
+  }
+  footer { text-align: center; color: var(--dim); padding: 30px 16px; font-size: 0.88rem; }
+  a { color: var(--blue); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>fgvk — 瀏覽器影片的即時插幀</h1>
+  <div class="sub">把瀏覽器視窗裡 24/30/60fps 的影片，用 <b>lsfg-vk</b> 即時插成 ~2× 幀率，顯示在同一塊螢幕上。音頻照舊由瀏覽器播放。</div>
+  <div class="badges">
+    <span class="badge">Ubuntu 26.04</span>
+    <span class="badge">GNOME Wayland</span>
+    <span class="badge">2× AMD R9700（各帶一屏 3440×1440）</span>
+    <span class="badge">C++20</span>
+    <span class="badge">SDL3 + Vulkan 1.2 + PipeWire</span>
+    <span class="badge">lsfg-vk 2.0.0</span>
+    <span class="badge">本機個人用・不分發</span>
+  </div>
+</header>
+
+<div class="layout">
+
+<nav class="toc">
+  <h2>目錄</h2>
+  <a href="#tldr">⚡ 30 秒理解</a>
+  <a href="#pipe">🗺️ 完整管線圖</a>
+  <a href="#capture">① 捕捉：portal + PipeWire</a>
+  <a href="#dedup">② 去重：32×32 MAD</a>
+  <a href="#present">③ 呈現：SDL3 + Vulkan</a>
+  <a href="#layer">④ 插幀：lsfg-vk layer</a>
+  <a href="#components">🧩 四個組件</a>
+  <a href="#protocol">🔌 stdio 控制協議</a>
+  <a href="#reexec">⏸️ 暫停 = re-exec</a>
+  <a href="#config">⚙️ 配置與環境變數</a>
+  <a href="#gui">🖥️ GUI 控制器</a>
+  <a href="#health">🩺 健康檢查與 clamp</a>
+  <a href="#build">🔨 建置與驗證</a>
+  <a href="#pitfalls">⚠️ 陷阱一覽</a>
+  <a href="#decisions">📋 設計決策速覽</a>
+</nav>
+
+<main>
+
+<!-- ================= TL;DR ================= -->
+<section class="card yellow" id="tldr">
+  <h2>⚡ 30 秒理解</h2>
+  <p>你在瀏覽器看影片（24fps）。這台機器裝了 Steam 的 <b>Lossless Scaling</b> 的 <code>lsfg-vk</code> Vulkan layer——它能在兩幀之間「算」出中間幀（插幀）。fgvk 做的事就是<b>把一條觀看路徑自組起來</b>：</p>
+  <div class="step"><div class="num">1</div><div class="txt"><b>抓畫面</b>：用 XDG portal + PipeWire 高率捕捉「瀏覽器視窗」的原始畫面（不截屏、無缩放失真）。</div></div>
+  <div class="step"><div class="num">2</div><div class="txt"><b>去重</b>：相同的幀（24fps 影片會有大量重複幀）不送進插幀器，省 GPU、也避免插出鬼影。</div></div>
+  <div class="step"><div class="num">3</div><div class="txt"><b>呈現</b>：用自己的 Vulkan 全螢幕視窗播放這些幀。</div></div>
+  <div class="step"><div class="num">4</div><div class="txt"><b>插幀</b>：lsfg-vk 作為 implicit layer「寄生」在 present 階段，每兩幀之間插入生成幀 → 螢幕以 ~2× 速率刷新（165Hz 螢幕 + 2× = 最多 120 帧/秒）。</div></div>
+  <div class="tldr">聲音完全不走這套管線——瀏覽器自己播，插幀視窗是靜音的（音畫偏移約 1–2 幀，設計上接受）。</div>
+  <p>專案有四個同層組件：<code>screen-fg</code>（主 binary）、<code>screen-fg-gui</code>（桌面 GUI 控制器）、<code>shared/</code>（兩端共用的協議 header）、<code>specs/</code>（鎖定版設計文件）。</p>
+</section>
+
+<!-- ================= PIPELINE ================= -->
+<section class="card" id="pipe">
+  <h2>🗺️ 完整管線圖</h2>
+  <div class="flow">
+    <div class="node n-capture"><b>瀏覽器視窗</b><span>portal ScreenCast v5 + PipeWire<br>≤60fps、window target</span></div>
+    <div class="arrow">→</div>
+    <div class="node n-dedup"><b>CPU 去重</b><span>32×32 luminance grid<br>MAD &lt; 3.0 → 丟掉</span></div>
+    <div class="arrow">→</div>
+    <div class="node n-present"><b>呈現 App</b><span>SDL3 全螢幕 + Vulkan FIFO<br>CPU 上傳 → blit → present</span></div>
+    <div class="arrow">→</div>
+    <div class="node n-layer"><b>lsfg-vk layer</b><span>implicit hook 在 present<br>插入生成幀（2×）</span></div>
+    <div class="arrow">→</div>
+    <div class="node n-display"><b>compositor</b><span>~2× 速率顯示<br>（同螢幕、165Hz）</span></div>
+  </div>
+  <div class="note">整條管線是<b>單一 process</b>、單一 binary（<code>screen-fg</code>）。無音頻路徑、無多螢幕通用化、無 &gt;60Hz 捕捉——spec 明確砍掉的範圍。</div>
+  <table>
+    <tr><th>階段</th><th>在哪個檔案</th><th>關鍵技術</th></tr>
+    <tr><td><span class="tag blue">捕捉</span></td><td><code>src/capture.{hpp,cpp}</code></td><td>GDBus（gio-2.0）+ PipeWire C API</td></tr>
+    <tr><td><span class="tag orange">去重</span></td><td><code>src/dedup.{hpp,cpp}</code></td><td>純 CPU、32×32 降採樣、MAD</td></tr>
+    <tr><td><span class="tag green">呈現</span></td><td><code>src/present.{hpp,cpp}</code></td><td>SDL3 Wayland WSI + Vulkan 1.2 FIFO</td></tr>
+    <tr><td><span class="tag purple">插幀</span></td><td>lsfg-vk（外部 layer）</td><td>implicit layer hook + Steam shader container</td></tr>
+    <tr><td><span class="tag red">控制</span></td><td><code>src/main.cpp</code></td><td>單執行緒 poll 迴圈 + stdio 協議</td></tr>
+  </table>
+</section>
+
+<!-- ================= CAPTURE ================= -->
+<section class="card blue" id="capture">
+  <h2><span class="tag blue">階段 ①</span>捕捉：XDG portal + PipeWire</h2>
+  <div class="tldr">GNOME Wayland 下，任何程式都<b>不能</b>直接抓螢幕/視窗——mutter 把一切擋在 XDG portal 後面。所以要走 portal 的 ScreenCast 介面：它會彈出標準選窗對話框，授權後用 PipeWire 收原始畫面 buffer。</div>
+  <h3>流程（<code>Capture::start()</code>，阻塞到使用者選完）</h3>
+  <div class="step"><div class="num">1</div><div class="txt"><code>g_bus_get_sync</code> 取得 session bus 連線 → <code>org.freedesktop.portal.Desktop</code></div></div>
+  <div class="step"><div class="num">2</div><div class="txt"><b>CreateSession</b>（必須帶 <code>handle_token</code> + <code>session_handle_token</code>，否則 portal 1.21.1 會 crash）</div></div>
+  <div class="step"><div class="num">3</div><div class="txt"><b>SelectSources</b> → GNOME 標準 picker 對話框彈出，使用者選「瀏覽器視窗」（每次啟動重選、不 cache 授予）</div></div>
+  <div class="step"><div class="num">4</div><div class="txt"><b>Start</b> → 拿到 stream 權限</div></div>
+  <div class="step"><div class="num">5</div><div class="txt"><b>OpenPipeWireRemote</b> → 收到 PipeWire 的 fd → 以 client API 收 per-frame buffer（event-driven，上限 60fps）</div></div>
+  <h3>為什麼這樣設計</h3>
+  <table>
+    <tr><th>決定</th><th>理由</th></tr>
+    <tr><td><b>window target</b>（不是整屏）</td><td>消滅「抓到 FG 自己的輸出視窗」的<b>回饋迴路</b>（插幀視窗自己蓋住螢幕 → 抓到的是插幀結果 → 無限套娃）</td></tr>
+    <tr><td>60fps 上限、砍掉 &gt;60Hz 捕捉</td><td>2× 60 = 120fps ≤ 165Hz 螢幕放得下；&gt;60fps 內容 2× 也放不開，無價值（決策 Q1）</td></tr>
+    <tr><td>每次啟動重跑 picker、不 cache</td><td>portal 授予會失效，cache 容易拿到過期 session（Q5）</td></tr>
+    <tr><td>buffer 是 1:1 紋理</td><td>無 scaling、無 dithering、游標隱藏、BGRA 與螢幕同格式 → 品質保真</td></tr>
+  </table>
+  <details>
+    <summary>深入：GDBus 呼叫的具體方式</summary>
+    <p>用 GLib 的同步 API：<code>g_bus_get_sync</code> 拿連線、<code>g_dbus_connection_call_sync</code> 發呼叫（async signal 用 <code>onSignal</code> 回調等 picker 結果）。PipeWire 主迴圈跑在<b>獨立交替線程</b>，主迴圈的 <code>poll()</code> 負責保持 DBus 連線健康。<code>isDead()</code> 偵測「來源視窗被關 / 串流斷掉」→ 工具自動退出（Q9）。</p>
+  </details>
+</section>
+
+<!-- ================= DEDUP ================= -->
+<section class="card orange" id="dedup">
+  <h2><span class="tag orange">階段 ②</span>去重：32×32 luminance grid + MAD</h2>
+  <div class="tldr">24fps 影片在 60fps 捕捉下，每 2.5 張捕捉幀才真正變一次——其餘全是重複幀。把重複幀丟掉，插幀器才不會白做工（也不會在兩張相同幀之間插出鬼影）。這一步<b>全在 CPU</b>做、零 GPU 佔用。</div>
+  <h3>算法（<code>Deduplicator</code>）</h3>
+  <div class="step"><div class="num">1</div><div class="txt">把整幀 raw BGRA <b>降採樣成 32×32 的亮度（luminance）grid</b>（1024 個格子）</div></div>
+  <div class="step"><div class="num">2</div><div class="txt">跟上一幀的 grid 算 <b>MAD（mean absolute difference，平均絕對差）</b></div></div>
+  <div class="step"><div class="num">3</div><div class="txt"><code>MAD &lt; 3.0/255</code>（config 可調）→ 視為重複、<b>丟掉</b>；否則送進呈現</div></div>
+  <div class="step"><div class="num">4</div><div class="txt">第一幀<b>永遠呈現</b>（沒有「上一幀」可比）</div></div>
+  <h3>為什麼選這個方案（vs 其他）</h3>
+  <table>
+    <tr><th>方案</th><th>結果</th><th>原因</th></tr>
+    <tr><td>全 buffer 嚴格相等</td><td>❌ 不採</td><td>編碼壓縮噪聲讓兩張「看起來一樣」的幀永遠不相等</td></tr>
+    <tr><td>全 buffer hash + 閾值</td><td>❌ 不採</td><td>8MB 全讀太慢太脆</td></tr>
+    <tr><td>GPU compute pass</td><td>❌ 不採</td><td>多一段同步沒必要</td></tr>
+    <tr><td><b>CPU 32×32 grid + MAD</b></td><td>✅ 定案</td><td>對壓縮噪聲穩健；1080p 約 1–2ms；零 GPU 佔用（Q2）</td></tr>
+  </table>
+  <div class="note"><b>結果</b>：VFR 安全（只呈現「真的變了」的幀）。副作用提醒：合成測試幀的 16×16 移動方塊太小（佔全幀 ~0.03%），格化後 MAD ≈ 0.001 &lt; 3.0 → dedup 只放行第一幀，所以 e2e 輸出是「3 帧捕捉 / 1 帧呈現」。</div>
+</section>
+
+<!-- ================= PRESENT ================= -->
+<section class="card green" id="present">
+  <h2><span class="tag green">階段 ③</span>呈現：SDL3 全螢幕 + Vulkan FIFO swapchain</h2>
+  <div class="tldr">把去重後剩下的幀，用自己的 borderless 全螢幕視窗、以 Vulkan 播放。這支視窗就是「被 lsfg-vk 插幀」的目標。</div>
+  <h3>buffer 流程（每幀）</h3>
+  <div class="step"><div class="num">1</div><div class="txt">PipeWire 送來的 BGRA 幀（CPU 端 copy）→ 寫進 <b>CPU upload buffer</b></div></div>
+  <div class="step"><div class="num">2</div><div class="txt">copy 到 <b>staging image</b>（依 swapchain 尺寸建立）</div></div>
+  <div class="step"><div class="num">3</div><div class="txt">blit（scale）到 <b>swapchain image</b></div></div>
+  <div class="step"><div class="num">4</div><div class="txt">選配畫上 HUD 文字（FPS / 倍數 / profile / Hz）</div></div>
+  <div class="step"><div class="num">5</div><div class="txt"><code>vkQueuePresentKHR</code>（FIFO 模式）→ <b>layer 就是 hook 在這一步</b>插生成幀</div></div>
+  <h3>關鍵決定</h3>
+  <table>
+    <tr><th>項目</th><th>決定</th><th>備註</th></tr>
+    <tr><td>swapchain 模式</td><td><code>VK_PRESENT_MODE_FIFO</code></td><td>layer 會強制；VRR 要關（研究 02 結論）</td></tr>
+    <tr><td>buffer 導入</td><td>CPU 上傳（<b>非</b> dmabuf zero-copy）</td><td>建置偏離：spec 原案是 dmabuf import，實作走 CPU 上傳（§13）</td></tr>
+    <tr><td><code>imageUsage</code></td><td>必須含 <code>TRANSFER_SRC + TRANSFER_DST</code></td><td>只給 COLOR_ATTACHMENT 會 let blit 變非法 GPU 操作（layer 要讀 swapchain 幀）</td></tr>
+    <tr><td>GPU 選擇</td><td>跟 <code>display</code> 的 card 走；config 可用 PCI bus ID 強制</td><td>本機 2 張 R9700 各帶一屏（Q7）</td></tr>
+    <tr><td>延遲</td><td>2× FG 端到端 ≈ 17–35ms</td><td>FG compute ≲1–2ms + FIFO 排隊 1–2 VBlank；接受 ~2 幀音畫偏移</td></tr>
+  </table>
+  <details>
+    <summary>深入：本機 Vulkan 環境的特殊性</summary>
+    <p>Mesa 26.0.8 radv + SDL3 0.4.2 + Wayland。Vulkan 只 enumerate 到 <b>1 個 device</b>（雖有兩張卡），GPU 選擇無歧義。本機 Vulkan header 是<b>裁剪版</b>：例如 <code>vkResetCommandBuffer</code> 沒有 device 參、<code>VkImageSubresourceRange</code> 沒有 <code>image</code> 成員（image 在 barrier 本體上）、<code>vkCmdCopyBufferToImage</code> 第 4 參是 dstImageLayout——寫 code 時對照官方文件會踩錯。</p>
+  </details>
+</section>
+
+<!-- ================= LAYER ================= -->
+<section class="card purple" id="layer">
+  <h2><span class="tag purple">階段 ④</span>插幀：lsfg-vk implicit layer</h2>
+  <div class="tldr">插幀算法本身是 Steam Lossless Scaling 的 <code>lsfg-vk</code>——一個 <b>implicit Vulkan layer</b>。它「寄生」在應用程式的 instance/device/present 呼叫上，不需要應用自己呼叫任何 API。screen-fg 只要讓層「認得」自己，插幀就自動發生。</div>
+  <h3>怎麼讓 layer 認得 screen-fg</h3>
+  <div class="step"><div class="num">1</div><div class="txt">layer 裝在 <code>~/.local/share/vulkan/implicit_layer.d/</code>（implcit layer 目錄，Vulkan loader 自動載入）</div></div>
+  <div class="step"><div class="num">2</div><div class="txt"><code>~/.config/lsfg-vk/conf.toml</code> 裡有一支 <code>[[profile]]</code>，其 <code>active_in = ["screen-fg"]</code>——<b>依執行檔名匹配</b></div></div>
+  <div class="step"><div class="num">3</div><div class="txt">匹配成功 → layer 初始化（half precision）、hook present → 每兩幀插 1 幀生成幀（預設 profile「2x FG / 100%」）</div></div>
+  <div class="note"><b>這個「依執行檔名匹配」的機制正是暫停功能的鑰匙</b>：執行檔名不匹配 → layer 自我 unload → 同樣的程式變成「純呈現、無插幀」。詳見下一節的 re-exec 機制。</div>
+  <h3>shader 來源（授權）</h3>
+  <p>插幀的 compute shader 來自使用者<b>已購買的</b> Steam app（Lossless Scaling）的 <code>lsfg-vk</code> update channel——官方作者分支的 build 直接 ship 相容的 2.1MB <code>lsfg-vk.dll</code>（PE 檔 .rsrc 內數字 resource ID 1–26 對應 v3.1 shader 集合）。授權 CC BY-NC-ND 4.0：<b>本機個人用 OK，不可分發、不可改作</b>。screen-fg 啟動時會健康檢查（層是否 enumerate 到、profile 是否匹配），不匹配 → 明確警告、<b>不靜默降級</b>。</p>
+  <details>
+    <summary>深入：為什麼不走 B 方案（direct API）</summary>
+    <p>lsfg-vk 也有 v2 public API（<code>lsfgvk::Instance/Context</code>、OPAQUE_FD 的 source/destination/sync fd、timeline semaphore），可以直接呼叫、不需 layer 與 .NET runtime。但 spec 定案（Q3）：<b>A（layer hook）預設</b>——已裝好、零額外同步代價；B 作為文件化 fallback（切換條件：profile 匹配失敗 / 某些視窗模式 hook 不到 / 要更低延遲 / 便攜性）。</p>
+  </details>
+</section>
+
+<!-- ================= COMPONENTS ================= -->
+<section class="card" id="components">
+  <h2>🧩 四個組件</h2>
+  <table>
+    <tr><th>組件</th><th>是什麼</th><th>依賴 / 關係</th></tr>
+    <tr>
+      <td><code>screen-fg/</code></td>
+      <td>主 binary（C++20）。整條管線 + stdio 控制通道。依 <code>specs/screen-fg-pipeline/spec.md</code>（LOCKED v1.0）</td>
+      <td>SDL3、PipeWire、Vulkan、GDBus/gio-2.0；引用 <code>../shared/</code></td>
+    </tr>
+    <tr>
+      <td><code>screen-fg-gui/</code></td>
+      <td>獨立桌面 GUI 控制器（gtkmm-4.0）。與 CLI 並存。依 <code>specs/screen-fg-gui/spec.md</code></td>
+      <td>gtkmm-4.0；fork+exec screen-fg；引用 <code>../shared/</code></td>
+    </tr>
+    <tr>
+      <td><code>shared/</code></td>
+      <td>純函式協議模組（單一 header-only 檔案 <code>protocol.hpp</code>，無 I/O、無外部 C 庫）</td>
+      <td>兩份 CMakeLists 都以 <code>-I &lt;fgvk&gt;/</code> 引用 → <code>#include "shared/protocol.hpp"</code>；<b>兩端編同一份 header，詞彙不可能漂移</b></td>
+    </tr>
+    <tr>
+      <td><code>specs/</code></td>
+      <td>兩份鎖定 spec + 設計史（map.md、issues/ 研究筆記）</td>
+      <td>pipeline：LOCKED v1.0（2026-09-09）+ §13 建置偏離附錄</td>
+    </tr>
+  </table>
+  <div class="warn"><b>不可動的相對結構</b>：<code>shared/</code> 是兩專案的 sibling；GUI 靠 <code>$SCREENFG_BIN</code> → <code>../screen-fg/build/screen-fg</code> 找 binary。動了目錄結構兩邊都壞。</div>
+  <details>
+    <summary>screen-fg 的 source 檔案清單</summary>
+    <p><code>main.cpp</code>（啟動流程 + 主迴圈 + stdio transport）、<code>capture.{hpp,cpp}</code>（portal + PipeWire）、<code>frame.hpp</code>（中性 frame 定義、不依賴 PW）、<code>frame_source.hpp</code>（抽象介面）、<code>synthetic.{hpp,cpp}</code>（測試用合成幀）、<code>dedup.{hpp,cpp}</code>、<code>present.{hpp,cpp}</code>、<code>config.{hpp,cpp}</code>、<code>reexec.{hpp,cpp}</code>、<code>clamp.hpp</code>。設計原則：關鍵決策全是<b>純函數</b>（config resolve、re-exec 決策、clamp、dedup、protocol parse），adapter 才碰 I/O → 所以有 68 個純單元測試、不 link PW/SDL/Vulkan 就能跑。</p>
+  </details>
+</section>
+
+<!-- ================= PROTOCOL ================= -->
+<section class="card" id="protocol">
+  <h2><span class="tag red">🔌</span> stdio 控制協議（GUI ⇄ screen-fg）</h2>
+  <div class="tldr">GUI 是 parent、screen-fg 是 child。兩條管線：<b>命令</b>走子程序 stdin（行式純文字）、<b>狀態</b>走 stdout（JSON 行）。screen-fg 的 stdout <b>只有</b>協議 JSON 行、log 全走 stderr（GUI 收進 log 區）。協議的<b>單一來源</b>是 <code>shared/protocol.hpp</code>——兩端編同一份 header，缺欄/格式錯 → <code>nullopt</code>（明確跳過、不默默 default）。</div>
+  <h3>命令（GUI → stdin）</h3>
+  <table>
+    <tr><th>命令</th><th>效果</th></tr>
+    <tr><td><code>pause</code></td><td>暫停插幀（screen-fg 端 re-exec 成 plain 複製本；PID 不變、管線保持）</td></tr>
+    <tr><td><code>resume</code></td><td>恢復插幀（re-exec 回 screen-fg）</td></tr>
+    <tr><td><code>hud 1</code> / <code>hud 0</code></td><td>HUD 開/關——<b>立即生效、不重啟</b></td></tr>
+    <tr><td><code>quit</code></td><td>乾淨退出</td></tr>
+  </table>
+  <h3>狀態（stdout JSON 行）</h3>
+  <pre>{"type":"status","fps":N,"mult":N,"layer":true,"state":"running|paused|exiting"}
+{"type":"exit","code":N}</pre>
+  <p>發送節奏：啟動即發一筆（讓 GUI 馬上拿到 state）→ 主迴圈 <b>1Hz 心跳</b>（與是否收到幀無關，GUI 穩定更新）→ 退出前發 <code>exiting</code> → 最後 <code>exit JSON</code>。</p>
+</section>
+
+<!-- ================= REEXEC ================= -->
+<section class="card" id="reexec">
+  <h2>⏸️ 暫停/恢復 = re-exec（最反直覺的一塊）</h2>
+  <div class="tldr">「暫停」的語義（Q8a）= <b>停止插幀、但繼續呈現原始幀</b>（還看得到瀏覽器在動，只是沒插幀）。為什麼不能運行中直接把 layer 關掉？因為 lsfg-vk layer 是 <b>per-process 全域單例、config 初始化只讀一次</b>——跑起來就切不了。解法很土但有效：<b>把程式重新 exec 成一份「layer 認不得」的複製本</b>。</div>
+  <h3>機制（re-exec 流程）</h3>
+  <div class="step"><div class="num">1</div><div class="txt">啟動時 <code>ensurePlainCopy</code>：把 <code>screen-fg</code> <b>cp 成</b> <code>screen-fg-plain</code>（同目錄、<b>真檔案非 symlink</b>——<code>/proc/self/exe</code> 會被 kernel 解析 symlink，symlink 改變不了 layer 的辨識結果；每次都重做，build 更新後舊 copy 會過期）</div></div>
+  <div class="step"><div class="num">2</div><div class="txt">收到 <code>pause</code>（或 P 鍵）→ 純函數 <code>resolveReexec()</code> 決定 plan：target = <code>screen-fg-plain</code>、env <code>SCREENFG_STATE=paused</code>、<code>SCREENFG_HUD</code> 帶上當前 HUD 狀態</div></div>
+  <div class="step"><div class="num">3</div><div class="txt">setenv + <code>execv</code>（PID 不變、argv 帶過、<b>跳過 --passthrough 避免無限 re-exec</b>）</div></div>
+  <div class="step"><div class="num">4</div><div class="txt">複製本啟動：執行檔名 <code>screen-fg-plain</code> 不匹配 conf.toml 的 <code>active_in</code> → <b>layer 自我 unload</b> → 純呈現、無插幀。程序重跑完整啟動（含 <code>source->start()</code>）</div></div>
+  <div class="step"><div class="num">5</div><div class="txt"><code>resume</code>（或 P 鍵）→ 反向 re-exec 回 <code>screen-fg</code>、env <code>SCREENFG_STATE=normal</code> → layer 重新認得 → 插幀恢復</div></div>
+  <div class="warn"><b>代價（已知、有提示）</b>：re-exec 重跑 <code>source->start()</code> → 真實捕捉模式下 <b>XDG portal picker 會重跑</b>（要重新選窗）；synthetic 模式看不到此現象。GUI 的暫停鈕 tooltip + log 都有警告。</div>
+  <div class="note"><b>詞彙陷阱</b>：re-exec env 用 <code>"normal"</code>/<code>"paused"</code>；status JSON 用 <code>"running"</code>/<code>"paused"</code>/<code>"exiting"</code>。兩套<b>不同詞彙</b>，code 裡有明確註解警告不可混用。</div>
+  <h3>keyboard（FG 視窗自己攬鍵盤，無 global hotkey——Wayland 沒有可靠路徑）</h3>
+  <p><kbd>Esc</kbd> = 退出 ｜ <kbd>P</kbd> = 暫停/恢復（Toggle）</p>
+</section>
+
+<!-- ================= CONFIG ================= -->
+<section class="card" id="config">
+  <h2>⚙️ 配置與環境變數</h2>
+  <h3>config.toml（<code>~/.config/screen-fg/config.toml</code>，flat-TOML 子集）</h3>
+  <p>每行 <code>key = value</code>、<code>#</code> 註解、unknown key 忽略、壞值 throw 帶行號；缺檔案 = 純預設。</p>
+  <table>
+    <tr><th>key</th><th>型別</th><th>預設</th><th>說明</th></tr>
+    <tr><td><code>dedup_threshold</code></td><td>float</td><td>3.0</td><td>MAD 閾值（0..255 尺度）</td></tr>
+    <tr><td><code>hud</code></td><td>true/false</td><td>true</td><td>HUD 開關（env 可覆蓋、stdin 可運行中改）</td></tr>
+    <tr><td><code>profile</code></td><td>quoted string</td><td><code>"2x FG / 100%"</code></td><td>lsfg-vk profile name</td></tr>
+    <tr><td><code>gpu</code></td><td>quoted string</td><td>""（auto）</td><td>PCI bus ID override（如 <code>"0000:01:00.0"</code>）</td></tr>
+    <tr><td><code>display</code></td><td>int</td><td>0</td><td>FG 視窗蓋的螢幕 index（GPU 跟該 display 走）</td></tr>
+    <tr><td><code>content_fps_cap</code></td><td>uint</td><td>60</td><td>內容幀率上限（&lt;60 時倍數再依它 clamp）</td></tr>
+  </table>
+  <h3>環境變數</h3>
+  <table>
+    <tr><th>變數</th><th>用途</th></tr>
+    <tr><td><code>SCREENFG_HUD</code></td><td>"1"/"0" 覆蓋 config hud；<b>re-exec 跨进程保留運行期 HUD 狀態</b></td></tr>
+    <tr><td><code>SCREENFG_DISPLAY</code></td><td>覆蓋 config display（螢幕 index）</td></tr>
+    <tr><td><code>SCREENFG_STATE</code></td><td>"paused" → 啟動即 passthrough（re-exec 帶 env）</td></tr>
+    <tr><td><code>SCREENFG_SYNTHETIC</code></td><td>非 "0" = 合成幀模式（不需 portal/picker，驗證呈現管線 + layer）</td></tr>
+    <tr><td><code>SCREENFG_SYNTHETIC_FRAMES</code></td><td>合成幀數（預設 300）</td></tr>
+    <tr><td><code>DISABLE_LSFGVK</code></td><td>"1" = 關掉 layer（lsfg-vk 內建開關；只驗呈現管線）</td></tr>
+    <tr><td><code>DBUS_SESSION_BUS_ADDRESS</code></td><td>必須是乾淨 bus 路徑（env 帶過期 guid 會 "Did not receive a reply"）</td></tr>
+    <tr><td><code>SCREENFG_BIN</code></td><td>GUI 找 screen-fg binary 的第一優先路徑</td></tr>
+  </table>
+  <p><b>resolve 優先序</b>：defaults → config.toml → env。全由純函數 <code>resolveConfig(tomlText, envMap)</code> 一次完成（不直接碰 getenv → 可測）。</p>
+  <h3>command line</h3>
+  <p><code>screen-fg [--config &lt;path&gt;] [--passthrough]</code>（--passthrough = 立即 re-exec 成 plain 複製本）</p>
+</section>
+
+<!-- ================= GUI ================= -->
+<section class="card" id="gui">
+  <h2>🖥️ GUI 控制器（screen-fg-gui）</h2>
+  <div class="tldr">一個 GTK4（gtkmm-4.0）桌面 app，<b>parent</b> 身份 fork+exec 出 screen-fg <b>child</b>，握住三條 pipe（stdin 寫命令 / stdout 讀 status / stderr 讀 log），用按鈕操作。不改 screen-fg 的 LOCKED 管線、CLI 完整保留並存。</div>
+  <h3>主窗戶（560×640，App ID <code>com.issac.screenfg-gui</code>）</h3>
+  <table>
+    <tr><th>控件</th><th>行為</th></tr>
+    <tr><td>binary 路徑 Entry</td><td>自動偵測（順序：$SCREENFG_BIN → build/screen-fg → ../screen-fg/build/screen-fg → /usr/local/bin → 執行檔相鄰 → PATH 掃描）；全找不到顯示提示、擋住啟動</td></tr>
+    <tr><td>啟動/停止鈕</td><td>狀態機：未 running → fork+exec（狀態 "starting…"）；running → 送 <code>quit</code> 命令（異步退出）</td></tr>
+    <tr><td>狀態列</td><td>即時顯示 FPS / 倍數 / layer on-off / state（running/paused/exiting → 已停止、錯誤結束 (N)）</td></tr>
+    <tr><td>暫停/恢復鈕</td><td>標籤跟 state；按下發 pause/resume；<b>tooltip + log 警告會重跑選窗</b></td></tr>
+    <tr><td>HUD switch</td><td>發 <code>hud 1|0</code>（立即生效）</td></tr>
+    <tr><td>log 區</td><td>child stderr 逐行 + GUI 端事件</td></tr>
+  </table>
+  <h3>process 控制（process.cpp）</h3>
+  <p>fork 前開三條 pipe；child <code>dup2</code> 後 <code>execv</code>。父端起 <b>兩個 reader 線程</b>：stdout reader（poll 100ms 超時 + 8KB chunked read + 抽行 → 純 <code>protocol::parse</code> → 回調排回 GLib 主執行緒）、stderr log reader（同模式）。EOF 時收屍（<code>waitpid</code>，被 signal 殺回 128+sig）並補發 exit 回調。</p>
+  <div class="warn"><b>退出不可卡死</b>：destructor 先送 quit → 設 <code>stopping_</code> 讓 reader ~100ms 內退出（bounded join）→ 關 stdin（child EOF）→ <code>waitpid(WNOHANG)</code>；child 還活就 <code>SIGTERM</code> 確保收掉（否則 orphan 給 init）。舊 code 阻塞 <code>join()</code> 會卡幾分鐘的教訓。</div>
+  <p><b>安裝</b>：binary 進 PATH 後 <code>cp screen-fg-gui.desktop ~/.local/share/applications/</code>（圖示：Name[zh_TW]="screen-fg 插帧控制"、Icon=video-display、Categories=Video）。</p>
+</section>
+
+<!-- ================= HEALTH ================= -->
+<section class="card" id="health">
+  <h2>🩺 健康檢查與 clamp（不靜默降級）</h2>
+  <h3>啟動時（screen-fg 依序）</h3>
+  <table>
+    <tr><th>檢查</th><th>方法</th><th>失敗時</th></tr>
+    <tr><td>layer 存在</td><td><code>vkEnumerateInstanceLayerProperties</code> 找 <code>VK_LAYER_LSFGVK_frame_generation</code></td><td>警告（檢查 implicit_layer.d）</td></tr>
+    <tr><td>profile 匹配</td><td>讀 <code>~/.config/lsfg-vk/conf.toml</code> 找 <code>active_in</code> 含 <code>"screen-fg"</code> 的 profile</td><td>警告（layer 會自我 unload、FG 不會啟動）</td></tr>
+    <tr><td>VRAM 餘量</td><td>讀 <code>/sys/class/drm/cardN/device/mem_info_vram_total|used</code></td><td>free &lt; 2048 MB → 警告（可能有其他程序佔 GPU，非 OOM crash）</td></tr>
+  </table>
+  <h3>倍數 clamp（Q4）</h3>
+  <p><code>maxMult = floor(displayHz / 60)</code>（window 捕捉上限 60fps）。例：165Hz → 2x（2×60=120 ≤ 165 ✓）；120Hz → 2x；119Hz → 1x。若 <code>content_fps_cap &lt; 60</code>（如 30fps 內容）→ 再依它 clamp 並<b>明確警告</b>。超顯示能力的 4× 請求不會發生——自動 clamp 到放得下的最大值。</p>
+</section>
+
+<!-- ================= BUILD ================= -->
+<section class="card green" id="build">
+  <h2>🔨 建置與驗證</h2>
+  <table>
+    <tr><th>做什麼</th><th>命令</th><th>預期</th></tr>
+    <tr><td>建置 screen-fg</td><td><code>cd screen-fg && cmake -B build && cmake --build build</code></td><td>0 error（依賴：libsdl3-dev libpipewire-0.3-dev libvulkan-dev libglib2.0-dev）</td></tr>
+    <tr><td>screen-fg 單元測試</td><td><code>./build/screen-fg-tests</code></td><td><b>74 checks, 0 failures</b>（純、不 link PW/SDL/Vulkan；6 個測試檔：config / config_resolve / dedup / clamp / reexec / frame_source）</td></tr>
+    <tr><td>建置 screen-fg-gui</td><td><code>cd screen-fg-gui && cmake -B build && cmake --build build</code></td><td>0 error（依賴：libgtkmm-4.0-dev；不需 libadwaita——無 C++ binding）</td></tr>
+    <tr><td>GUI 協議測試</td><td><code>./build/screen-fg-gui-tests</code></td><td>0 failures（純 decoder 測試）</td></tr>
+    <tr><td>e2e（synthetic，含 layer）</td><td><code>DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus" SCREENFG_SYNTHETIC=1 SCREENFG_SYNTHETIC_FRAMES=3 SCREENFG_DISPLAY=1 ./build/screen-fg</code></td><td>stderr：synthetic 模式 → present 就緒 → <code>結束（3 帧捕捉 / 1 帧呈現）</code>；stdout：status JSON + <code>{"type":"exit","code":0}</code>；exit 0</td></tr>
+  </table>
+  <p>加 <code>DISABLE_LSFGVK=1</code> = 關 layer、只驗呈現管線。e2e 常見輸出：lsfg-vk hook 訊息、<code>最大倍數 2x（165Hz / 60fps 捕捉）</code>、可能的 VRAM 警告。</p>
+</section>
+
+<!-- ================= PITFALLS ================= -->
+<section class="card red" id="pitfalls">
+  <h2>⚠️ 陷阱一覽（本機實測踩過的坑）</h2>
+  <h3>GDBus / portal</h3>
+  <table>
+    <tr><th>坑</th><th>後果</th><th>解法</th></tr>
+    <tr><td>env 的 bus 地址帶過期 guid</td><td>"Did not receive a reply"</td><td>跑前設 <code>DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"</code></td></tr>
+    <tr><td>CreateSession 缺 session token</td><td>portal 1.21.1 NoReply / 把整個 portal 打死</td><td>務必同時帶 <code>handle_token</code> + <code>session_handle_token</code></td></tr>
+    <tr><td>token 含 dash</td><td>"Invalid token"</td><td>只用 <code>[a-zA-Z0-9_]</code></td></tr>
+    <tr><td>expected reply type 漏外層 tuple</td><td>解碼錯</td><td>回 <code>o</code> 的方法用 <code>G_VARIANT_TYPE("(o)")</code></td></tr>
+    <tr><td><code>g_variant_new("@a{sv}")</code> 又 unref dict</td><td>double-free</td><td>它 adopt 了 ref（不 inc），建完 params 不要再 unref</td></tr>
+  </table>
+  <h3>Vulkan 呈現</h3>
+  <table>
+    <tr><th>坑</th><th>後果</th><th>解法</th></tr>
+    <tr><td><code>VkPresentInfoKHR.pSwapchains</code> 漏設（count=1 但 nullptr）</td><td>radv 崩在 WSI per-image loop</td><td>補 <code>pi.pSwapchains = &amp;swap</code></td></tr>
+    <tr><td><code>vkGetSwapchainImagesKHR</code> 漏第二次（fill）呼叫</td><td>image 停在 VK_NULL_HANDLE → createImageView 崩</td><td>先取 count、再 fill</td></tr>
+    <tr><td>ImageMemoryBarrier 漏設 <code>.image</code></td><td>radv deref null segfault</td><td>兩個 barrier（DST→SRC、SRC→DST）都要設</td></tr>
+    <tr><td>swapchain imageUsage 只有 COLOR_ATTACHMENT</td><td>blit 非法 GPU 操作</td><td>加 TRANSFER_SRC + TRANSFER_DST</td></tr>
+    <tr><td>acquireSem 被 wait 過又給 present wait</td><td><b>永久阻塞、SIGTERM 都殺不掉</b>（semaphore 是 one-shot）</td><td>submit wait acquireSem + signal readySem；present 只 wait readySem</td></tr>
+    <tr><td><code>shutdown()</code> 不 idempotent</td><td>二次 destroy 已死 device</td><td>destroy 後把句柄設回 null</td></tr>
+  </table>
+  <h3>gtkmm / GUI</h3>
+  <table>
+    <tr><th>坑</th><th>後果</th><th>解法</th></tr>
+    <tr><td><code>Gtk::Application</code> 不 <code>add_window</code></td><td><code>run()</code> 立即回 0（進程活 &lt;0.2s）</td><td>建窗後 <code>add_window(*win_)</code></td></tr>
+    <tr><td>reader 改回 blocking read / 逐字元 readLine 且 buffer 不 clear</td><td>累加行 → status 全顯示 fps:0</td><td>維持 poll + chunked read + pending buffer 抽行、每行各別 parse</td></tr>
+    <tr><td>多字元 UTF-8 用 <code>char</code> 字面量</td><td>multichar overflow（值被截斷）</td><td>改用字串 <code>find("（")</code></td></tr>
+    <tr><td>destructor 阻塞 join()</td><td>app 退出卡死幾分鐘</td><td>stopping_ 旗標 + bounded join + WNOHANG + SIGTERM 兜底</td></tr>
+  </table>
+</section>
+
+<!-- ================= DECISIONS ================= -->
+<section class="card" id="decisions">
+  <h2>📋 設計決策速覽（grilling 2026-09-09 定案）</h2>
+  <table>
+    <tr><th>#</th><th>決定</th><th>結果</th></tr>
+    <tr><td>Q1</td><td>&gt;60Hz 捕捉選項</td><td><b>砍掉</b>（window target / 60fps cap）</td></tr>
+    <tr><td>Q2</td><td>去重方案</td><td>CPU 32×32 luminance grid + MAD（3/255 預設）</td></tr>
+    <tr><td>Q3</td><td>A/B 整合</td><td>單一 binary、插拔 backend、A（layer）預設、B 首版不實作</td></tr>
+    <tr><td>Q4</td><td>超顯示能力</td><td>自動 clamp 到 floor(hz/60) + warning</td></tr>
+    <tr><td>Q5</td><td>UX</td><td>無 global hotkey；視窗內 Esc/P；每次 portal picker；HUD 可關</td></tr>
+    <tr><td>Q6</td><td>語言/stack</td><td>C++ + SDL3 + Vulkan 1.2 + PipeWire + glib，直接上</td></tr>
+    <tr><td>Q7</td><td>GPU 選擇</td><td>跟捕捉視窗的 output 走；config PCI bus ID override（建置偏離：portal 不回報 output → 改 config display index）</td></tr>
+    <tr><td>Q8</td><td>暫停語義</td><td>停止插幀、繼續呈現原始幀（建置偏離：re-exec 成 plain 複製本）</td></tr>
+    <tr><td>Q9</td><td>視窗關閉</td><td>工具自動退出 + 提示</td></tr>
+  </table>
+  <p>建置偏離附錄（spec §13）：Q8 暫停實現改 re-exec（層無法運行期切換）、Q7 GPU 選擇改 config display index（portal 不回報視窗 output）、conf.toml 已加 <code>[[profile]] active_in = ["screen-fg"]</code>（備份 <code>conf.toml.bak-screenfg</code>）。</p>
+  <div class="note"><b>授權邊界</b>：shader 來自使用者已購買的 Steam app；lsfg-vk 授權 CC BY-NC-ND 4.0 → 本機個人用 OK、<b>不可分發、不可改作</b>。專案名 <code>fgvk</code> 只是目錄名，binary 維持叫 <code>screen-fg</code>（layer 匹配全靠這個名字）。</div>
+</section>
+
+</main>
+</div>
+
+<footer>
+  fgvk 專案運行原理詳解 ｜ 依 specs（LOCKED v1.0）+ 實際 source code 整理 ｜ 生成於 2026-09-09
+</footer>
+
+</body>
+</html>

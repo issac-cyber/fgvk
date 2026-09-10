@@ -145,9 +145,18 @@ std::optional<CtrlCmd> pollStdinCmd() {
 
 } // namespace
 
+// pw_init 必須在 pw_main_loop_new 之前呼叫（實測：缺了它 pw_main_loop_new 載不動
+// support.system handle → "No such file or directory"；pw-dump 等工具就是靠它）。
+// RAII guard 保證每個 return 路徑都跑 pw_deinit（含 error return）。
+struct PwInitGuard {
+    explicit PwInitGuard(int* a, char*** v) { pw_init(a, v); }
+    ~PwInitGuard() { pw_deinit(); }
+};
+
 int main(int argc, char** argv) {
     std::string selfP = selfPath();
     ensurePlainCopy(selfP);
+    PwInitGuard pwGuard(&argc, &argv);
 
     // 1. config（--config <path> 可選；否則用預設路徑）；
     //    resolveConfig 把 toml + env（HUD/DISPLAY/STATE）一次性 resolve 成最終設定 + paused
@@ -189,8 +198,11 @@ int main(int argc, char** argv) {
     std::unique_ptr<FrameSource> source;
     if (synthetic)
         source = std::make_unique<SyntheticSource>(1280, 720, synFrames);
-    else
-        source = std::make_unique<Capture>();
+    else {
+        auto cap = std::make_unique<Capture>();
+        cap->setMonitorMode(cfg.captureMode == "monitor");
+        source = std::move(cap);
+    }
     try {
         source->start();
     } catch (const std::exception& e) {

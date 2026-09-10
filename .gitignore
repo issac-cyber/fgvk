@@ -1,1 +1,5 @@
 build/
+build-asan/
+*.log
+.scratch/
+omp

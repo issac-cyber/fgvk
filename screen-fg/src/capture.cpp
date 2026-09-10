@@ -9,10 +9,13 @@
 #include <spa/param/video/raw.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -22,9 +25,10 @@ namespace screenfg {
 
 namespace {
 
-struct Pending {
+ struct Pending {
     std::string wantKey;
     std::string result;
+    int streamNodeId = -1; // Start 的 streams[0].uint32（capture source 的 node ID）
     bool done = false;
 };
 
@@ -43,14 +47,20 @@ struct Capture::Impl {
     std::unordered_map<std::string, Pending> pendings;
     std::string sessionHandle;
     std::string parentWindow;
+    bool monitorMode = false;
     std::string error;
+    std::string selectRestoreToken; // 存檔的 token，SelectSources 帶入（restore 成功免對話框）
+    std::string restoreToken;       // Start Response options 回來的 restore_token（single-use、要存檔）
     // ---- PipeWire 1.6.2 ----
     int pwFd = -1;
+    int streamNodeId = -1; // Start 回來的 capture source node ID（客戶端要 target 它）
     struct pw_main_loop* ml = nullptr;
     struct pw_context* ctx = nullptr;
     struct pw_core* core = nullptr;
     struct pw_stream* stream = nullptr;
     spa_hook pwHook;
+    spa_hook ctxHook;
+    int globalCount = 0;
     // negotiating 到的格式（來自 param_changed）
     uint32_t fmtW = 0, fmtH = 0;
     int pixFmt = -1;
@@ -100,6 +110,66 @@ GVariant* makeCreateSessionDict() {
     return g_variant_builder_end(&b);
 }
 
+// SelectSources 專用：handle_token + types（uint32 bitmask，portal 1.21.1 ScreenCast v5）。
+// 1=MONITOR / 2=WINDOW / 4=VIRTUAL（0 非有效、GNOME backend 會拒）。
+// window 模式明確 request WINDOW（2），還原 spec 的 picker 選視窗行為；
+// monitor 模式 request MONITOR（1）、無 picker、tolerate 空 parent。
+// 注意：舊 code 傳的 "sources" 選項在 portal 1.21.1 不存在，會被 xdp_filter_options
+// 靜默丟棄、backend 落回 default=MONITOR（monitor 模式只是巧合工作）。
+// GLib 2.88 的 GVariantBuilder {sv} 對 GVariant 參數是「借用」（存指標、不 inc ref、
+// end() 也不 copy）→ 新造的 GVariant 參數**不要 unref**（dict 引用它、活到 dict 釋放）。
+GVariant* makeSelectDict(bool monitor, const std::string& restoreToken) {
+    GVariantBuilder b;
+    g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+    std::string ht = makeToken("req");
+    g_variant_builder_add(&b, "{sv}", "handle_token", g_variant_new_string(ht.c_str()));
+    uint32_t types = monitor ? 1u : 2u; // 1 = MONITOR, 2 = WINDOW
+    g_variant_builder_add(&b, "{sv}", "types", g_variant_new_uint32(types));
+    // persist_mode=2（portal ScreenCast v4+）：session 持久到被明確 revoke 為止。
+    // 下次啟動帶上次的 restore_token 還原 → portal-gnome 跳過同意對話框。
+    g_variant_builder_add(&b, "{sv}", "persist_mode", g_variant_new_uint32(2));
+    if (!restoreToken.empty())
+        g_variant_builder_add(&b, "{sv}", "restore_token", g_variant_new_string(restoreToken.c_str()));
+    return g_variant_builder_end(&b);
+}
+
+// 從 a{sv} dict 抽一個 entry（回 GVariant* 值或 nullptr；呼叫方負責 unref）。
+// 參數 d 本身不 take ref（呼叫方擁有）。
+GVariant* dictEntry(GVariant* d, const char* k) {
+    if (!d || !g_variant_is_of_type(d, G_VARIANT_TYPE("a{sv}")))
+        return nullptr;
+    gsize n = g_variant_n_children(d);
+    for (gsize i = 0; i < n; ++i) {
+        GVariant* e = g_variant_get_child_value(d, i); // {sv}
+        GVariant* key = g_variant_get_child_value(e, 0);
+        const char* ks = g_variant_get_string(key, nullptr);
+        g_variant_unref(key);
+        if (ks && std::string(ks) == k) {
+            GVariant* v = g_variant_get_child_value(e, 1); // v
+            GVariant* inner = g_variant_get_child_value(v, 0);
+            g_variant_unref(v);
+            g_variant_unref(e);
+            return inner;
+        }
+        g_variant_unref(e);
+    }
+    return nullptr;
+}
+
+// 從 a{sv} 抽一個 string entry（缺回 ""）
+std::string dictStr(GVariant* d, const char* k) {
+    GVariant* v = dictEntry(d, k);
+    if (!v)
+        return "";
+    std::string out;
+    if (g_variant_is_of_type(v, G_VARIANT_TYPE_STRING)) {
+        char* s = nullptr;
+        g_variant_get(v, "s", &s);
+        if (s) { out = s; g_free(s); }
+    }
+    g_variant_unref(v);
+    return out;
+}
 
 // 把一帧 source pixel 轉成正規 BGRA（dst stride = w*4）。
 // 支援 BGRx / BGRA / RGBx / RGBA；其它 pixfmt 回 false。
@@ -245,10 +315,31 @@ void Capture::onParam(void* data, uint32_t id, const struct spa_pod* param) {
 
 void Capture::onState(void* data, enum pw_stream_state /*old*/, enum pw_stream_state state, const char* error) {
     auto* im = static_cast<Capture::Impl*>(data);
+    fprintf(stderr, "[screen-fg] 串流 state=%d err=%s\n", (int) state, error ? error : "-");
+    if (state == PW_STREAM_STATE_PAUSED) {
+        fprintf(stderr, "[screen-fg] PAUSED: driving=%d lazy=%d\n",
+                pw_stream_is_driving(im->stream), pw_stream_is_lazy(im->stream));
+        int rc = pw_stream_set_active(im->stream, true);
+        fprintf(stderr, "[screen-fg] set_active(true) rc=%d\n", rc);
+        int rc2 = pw_stream_trigger_process(im->stream);
+        fprintf(stderr, "[screen-fg] trigger_process rc=%d\n", rc2);
+    }
     if (state == PW_STREAM_STATE_ERROR) {
         im->dead.store(true);
-        fprintf(stderr, "[screen-fg] 捕捉串流中斷（%s）\n", error ? error : "unknown");
     }
+}
+
+// core 連線建立時，server 的每個 global（含 capture source node）會觸發 global_added。
+// 用來確認連線是否真的建立（pw_global_get_* 是 internal、不在 public API，故只數個數）。
+void Capture::onCtxGlobalAdded(void* data, struct pw_global* global) {
+    auto* im = static_cast<Capture::Impl*>(data);
+    im->globalCount++;
+    fprintf(stderr, "[screen-fg] global_added #%d\n", (int) im->globalCount);
+}
+void Capture::onCtxDriverAdded(void* data, struct pw_impl_node* node) {
+    auto* im = static_cast<Capture::Impl*>(data);
+    (void)node;
+    fprintf(stderr, "[screen-fg] driver_added（core 連線建立）\n");
 }
 
 // ---------- portal DBus 靜態成員 ----------
@@ -282,9 +373,21 @@ void Capture::onSignal(GDBusConnection*, const char*, const char* objectPath,
             if (keyStr && std::string(keyStr) == it->second.wantKey) {
                 GVariant* val = g_variant_get_child_value(entry, 1); // v
                 GVariant* inner = g_variant_get_child_value(val, 0); // 真正的值
-                const char* valStr = g_variant_get_string(inner, nullptr);
-                if (valStr)
-                    it->second.result = valStr;
+                if (std::string(keyStr) == "streams") {
+                    // streams = a(ua{sv})；第 0 個元素 = (u node_id, a{sv} meta)
+                    if (g_variant_n_children(inner) > 0) {
+                        GVariant* elem = g_variant_get_child_value(inner, 0); // (u, a{sv})
+                        GVariant* nidVar = g_variant_get_child_value(elem, 0); // u
+                        if (g_variant_is_of_type(nidVar, G_VARIANT_TYPE_UINT32))
+                            it->second.streamNodeId = (int) g_variant_get_uint32(nidVar);
+                        g_variant_unref(nidVar);
+                        g_variant_unref(elem);
+                    }
+                } else {
+                    const char* valStr = g_variant_get_string(inner, nullptr);
+                    if (valStr)
+                        it->second.result = valStr;
+                }
                 g_variant_unref(inner);
                 g_variant_unref(val);
             }
@@ -292,6 +395,17 @@ void Capture::onSignal(GDBusConnection*, const char*, const char* objectPath,
             g_variant_unref(entry);
         }
         g_variant_unref(body);
+    }
+    // Response signal 第三參 options（a{sv}）：persist_mode=2 獲許時 restore_token (s)
+    // 從這裡回來（single-use；下次 SelectSources 要用，故存到 im 供 start() 存檔）
+    GVariant* opts = g_variant_get_child_value(params, 2);
+    if (opts) {
+        std::string rt = dictStr(opts, "restore_token");
+        if (!rt.empty()) {
+            im->restoreToken = rt;
+            fprintf(stderr, "[screen-fg] 收到 restore_token（len=%zu）\n", rt.size());
+        }
+        g_variant_unref(opts);
     }
     it->second.done = true;
 }
@@ -311,7 +425,8 @@ void Capture::waitFor(Impl& im, const std::string& reqPath, int timeoutMs) {
 
 // 執行一次 portal 呼叫（回 o handle），再等 Response signal
 std::string Capture::portalAsync(Impl& im, const char* method, const std::string* session,
-                                const std::string* parent, const std::string& wantKey, int timeoutMs) {
+                                const std::string* parent, const std::string& wantKey, int timeoutMs,
+                                bool monitor) {
     GError* e = nullptr;
     const char* DEST = "org.freedesktop.portal.Desktop";
     const char* PATH = "/org/freedesktop/portal/desktop";
@@ -319,7 +434,8 @@ std::string Capture::portalAsync(Impl& im, const char* method, const std::string
     // CreateSession 用同時帶兩個 token 的 dict（portal 1.21.1 缺 session token 會 NoReply）
     std::string m(method);
     GVariant* dict = (m == "CreateSession") ? makeCreateSessionDict()
-                                           : makeDict("handle_token", makeToken("req"));
+                        : (m == "SelectSources") ? makeSelectDict(monitor, im.selectRestoreToken)
+                        : makeDict("handle_token", makeToken("req"));
     // "@a{sv}" 讓 g_variant_new adopt dict 的 ref（不再 inc），所以建完 params
     // 之後「不要」unref dict（會 double-free）。
     GVariant* params;
@@ -334,9 +450,11 @@ std::string Capture::portalAsync(Impl& im, const char* method, const std::string
     if (!params) { throw std::runtime_error("g_variant_new 失敗"); }
 
     // D-Bus 方法回傳在 wire 上是 tuple：回 o 的方法 → expected type "(o)"
+    // 注意：GLib 2.88 的 g_dbus_message_set_body 用 g_variant_ref_sink adopt params
+    // 的 ref、message dispose 時 unref → call_sync 會自行釋放 params，**不要**再 unref
+    //（雙重釋放 = UAF 寫入已釋放記憶體、會延遲腐化 PipeWire 節點、segfault）。
     GVariant* ret = g_dbus_connection_call_sync(im.conn, DEST, PATH, IFACE, method,
         params, G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, (guint32) timeoutMs, nullptr, &e);
-    g_variant_unref(params);
     if (!ret) {
         std::string msg = e ? e->message : "no reply";
         g_clear_error(&e);
@@ -348,7 +466,7 @@ std::string Capture::portalAsync(Impl& im, const char* method, const std::string
     g_free(handle);
     g_variant_unref(ret);
 
-    im.pendings[reqPath] = Pending{wantKey, {}, false};
+    im.pendings[reqPath] = Pending{wantKey, {}, -1, false};
     im.error.clear();
     waitFor(im, reqPath, timeoutMs);
     if (!im.error.empty()) {
@@ -356,6 +474,8 @@ std::string Capture::portalAsync(Impl& im, const char* method, const std::string
         im.error.clear();
         throw std::runtime_error(std::string(method) + ": " + err);
     }
+    if (im.pendings[reqPath].streamNodeId != -1)
+        im.streamNodeId = im.pendings[reqPath].streamNodeId;
     return im.pendings[reqPath].result;
 }
 
@@ -364,6 +484,8 @@ std::string Capture::portalAsync(Impl& im, const char* method, const std::string
 Capture::Capture() : impl_(new Impl) {}
 
 Capture::~Capture() { stop(); }
+
+void Capture::setMonitorMode(bool m) { impl_->monitorMode = m; }
 
 void Capture::start() {
     auto& im = *impl_;
@@ -389,16 +511,54 @@ void Capture::start() {
     if (im.sessionHandle.empty())
         throw std::runtime_error("CreateSession 沒有回 session_handle");
 
-    // 2. SelectSources（picker 選視窗；阻塞到使用者選完）
-    fprintf(stderr, "[screen-fg] 請在 picker 視窗選要捕捉的視窗...\n");
-    im.parentWindow = portalAsync(im, "SelectSources", &im.sessionHandle, nullptr, "parent", 300000);
-    if (im.parentWindow.empty())
-        throw std::runtime_error("SelectSources 沒有選到視窗");
-    fprintf(stderr, "[screen-fg] 已選視窗 %s\n", im.parentWindow.c_str());
+    // 2. SelectSources（window 模式走 picker 選視窗、阻塞到選完；monitor 模式無 picker、無視窗 parent）
+    //    persist_mode=2 + 上次存檔的 restore_token：首次執行對話框可能出現（點一次 Allow）；
+    //    之後 token 還原 session、portal-gnome 在 restore 成功時跳過對話框。
+    const char* home = getenv("HOME");
+    std::string tokPath = std::string(home ? home : "") + "/.config/screen-fg/restore_token";
+    {
+        std::ifstream tf(tokPath);
+        std::getline(tf, im.selectRestoreToken);
+    }
+    if (!im.selectRestoreToken.empty())
+        fprintf(stderr, "[screen-fg] SelectSources: 用 restore_token 還原（預期免對話框）...\n");
+    else
+        fprintf(stderr, "[screen-fg] SelectSources: persist_mode=2（無存檔 token、首次可能出對話框）...\n");
+    try {
+        if (im.monitorMode) {
+            fprintf(stderr, "[screen-fg] monitor 捕捉（全螢幕 monitor、無 picker）...\n");
+            im.parentWindow = portalAsync(im, "SelectSources", &im.sessionHandle, nullptr, "parent", 300000, true);
+            fprintf(stderr, "[screen-fg] monitor 已選 %s\n",
+                    im.parentWindow.empty() ? "(monitor)" : im.parentWindow.c_str());
+        } else {
+            fprintf(stderr, "[screen-fg] 請在 picker 視窗選要捕捉的視窗...\n");
+            im.parentWindow = portalAsync(im, "SelectSources", &im.sessionHandle, nullptr, "parent", 300000, false);
+            if (im.parentWindow.empty())
+                throw std::runtime_error("SelectSources 沒有選到視窗");
+            fprintf(stderr, "[screen-fg] 已選視窗 %s\n", im.parentWindow.c_str());
+        }
+    } catch (const std::runtime_error& ex) {
+        if (!im.selectRestoreToken.empty())
+            fprintf(stderr, "[screen-fg] 提示：存檔 restore_token 可能過期、可刪 %s 後重試\n", tokPath.c_str());
+        throw;
+    }
 
     // 3. Start（obs 驗證過的流程：註冊 capture source）
     std::string emptyParent;
     portalAsync(im, "Start", &im.sessionHandle, &emptyParent, "streams", 60000);
+
+    // 3a. persist_mode=2 獲許 → single-use restore_token 從 Response options 回來、存檔供下次還原
+    if (!im.restoreToken.empty()) {
+        (void) mkdir((std::string(home ? home : "") + "/.config/screen-fg").c_str(), 0755);
+        std::ofstream of(tokPath, std::ios::trunc);
+        if (of) {
+            of << im.restoreToken;
+            fprintf(stderr, "[screen-fg] restore_token 已存檔 → %s\n", tokPath.c_str());
+        } else {
+            fprintf(stderr, "[screen-fg] 警告：restore_token 寫 %s 失敗\n", tokPath.c_str());
+        }
+        im.restoreToken.clear();
+    }
 
     // 4. OpenPipeWireRemote → fd
     {
@@ -414,7 +574,7 @@ void Capture::start() {
             "org.freedesktop.portal.ScreenCast", "OpenPipeWireRemote",
             params, G_VARIANT_TYPE("(h)"), G_DBUS_CALL_FLAGS_NONE, 15000,
             nullptr, &outFds, nullptr, &e2);
-        g_variant_unref(params);
+        // params 被 call_sync adopt（見上註解）→ 不要再 unref
         if (!ret) {
             std::string m = e2 ? e2->message : "no reply";
             g_clear_error(&e2);
@@ -427,15 +587,31 @@ void Capture::start() {
         }
         im.pwFd = g_unix_fd_list_get(outFds, 0, nullptr);
         g_object_unref(outFds);
+        // 診斷：PipeWire pipe 應是 unix socket；確認 fd 型別
+        {
+            struct stat st{};
+            if (fstat(im.pwFd, &st) == 0)
+                fprintf(stderr, "[screen-fg] pwFd=%d type=0%o (socket=0140000)\n", im.pwFd, (unsigned)(st.st_mode & S_IFMT));
+            else
+                fprintf(stderr, "[screen-fg] pwFd=%d fstat 失敗（fd 可能已關閉）\n", im.pwFd);
+        }
     }
 
-    // 5. PipeWire 1.6.2 client（remote fd）
+    // 5. PipeWire 1.6.2 client（remote fd）。pw_init 已在 main() 跑過（PwInitGuard），
+    //    故 pw_main_loop_new 能正常載 support.system handle。
     im.ml = pw_main_loop_new(nullptr);
     if (!im.ml)
         throw std::runtime_error("pw_main_loop_new 失敗");
     im.ctx = pw_context_new(pw_main_loop_get_loop(im.ml), nullptr, 0);
     if (!im.ctx)
         throw std::runtime_error("pw_context_new 失敗");
+    // 診斷：core 連線建立時 global_added / driver_added 會觸發（確認連線 + 列出可用 node）
+    struct pw_context_events ctxEvs;
+    memset(&ctxEvs, 0, sizeof ctxEvs);
+    ctxEvs.version = PW_VERSION_CONTEXT_EVENTS;
+    ctxEvs.global_added = &Capture::onCtxGlobalAdded;
+    ctxEvs.driver_added = &Capture::onCtxDriverAdded;
+    pw_context_add_listener(im.ctx, &im.ctxHook, &ctxEvs, &im);
     im.core = pw_context_connect_fd(im.ctx, im.pwFd, nullptr, 0);
     if (!im.core)
         throw std::runtime_error("pw_context_connect_fd 失敗");
@@ -455,7 +631,13 @@ void Capture::start() {
     evs.param_changed = &Capture::onParam;
     evs.process = &Capture::onProcess;
     pw_stream_add_listener(im.stream, &im.pwHook, &evs, &im);
-    if (pw_stream_connect(im.stream, PW_DIRECTION_INPUT, PW_ID_ANY, PW_STREAM_FLAG_NONE, nullptr, 0) < 0)
+    // 客戶端要 target portal 建立的 capture source node（Start 回來的 node ID），不是
+    // PW_ID_ANY（fd 連線是受限連線、只暴露該 source，ANY 找不到 → "no target node available"）。
+    int targetId = (im.streamNodeId != -1) ? im.streamNodeId : PW_ID_ANY;
+    fprintf(stderr, "[screen-fg] stream target node=%d\n", targetId);
+    // 本機不當 driver（source 是 node.driver 的 clock source、會自己 push 幀）。
+    // 加 DRIVER flag 會造成兩個 driver 衝突、兩節點都 suspended。用 NONE。
+    if (pw_stream_connect(im.stream, PW_DIRECTION_INPUT, targetId, PW_STREAM_FLAG_NONE, nullptr, 0) < 0)
         throw std::runtime_error("pw_stream_connect 失敗");
     // 主迴圈跑在獨立交替線程（阻塞 run）
     im.loopThread = std::thread([ml = im.ml] { pw_main_loop_run(ml); });
@@ -526,7 +708,7 @@ void Capture::stop() {
             (void) g_dbus_connection_call_sync(im.conn, "org.freedesktop.portal.Desktop",
                 im.sessionHandle.c_str(), "org.freedesktop.portal.Session", "Close",
                 params, nullptr, G_DBUS_CALL_FLAGS_NONE, 500, nullptr, &e);
-            g_variant_unref(params);
+            // params 被 call_sync adopt → 不要再 unref
             g_clear_error(&e);
         }
         g_object_unref(im.conn);

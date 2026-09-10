@@ -15,6 +15,7 @@ struct Config {
     std::string profile = "2x FG / 100%"; // lsfg-vk profile name
     int displayIndex = 0; // which display the FG window covers
     uint32_t contentFpsCap = 60;
+    std::string captureMode = "window"; // "window"（spec 預設：picker 選視窗）| "monitor"（全螢幕 monitor 捕捉、無 picker）
 };
 
 // 環境變數的注入表示（可測性：不直接碰 getenv）。
