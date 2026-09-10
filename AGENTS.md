@@ -60,7 +60,7 @@ fg（frame generation）專案：**影片的即時插幀**（本機個人用）�
 | 檔案 | 用途 |
 |------|------|
 | `~/.config/screen-fg/config.toml` | screen-fg 持久設定（flat-TOML 子集；缺檔案 = 純預設；key 見 `screen-fg/AGENTS.md`） |
-| `~/.config/lsfg-vk/conf.toml` | lsfg-vk layer 設定；現 4 支 FG profile（2x/3x/4x/10x / 100%，multiplier 2/3/4/10，vsync + override_present_mode + performance_mode）；extension 用 `LSFGVK_PROFILE` 選 profile（不再需要 active_in）；備份 `conf.toml.bak-ext`（清理前）、`conf.toml.bak-screenfg`（screen-fg 前） |
+| `~/.config/lsfg-vk/conf.toml` | lsfg-vk layer 設定；現 4 支 FG profile（2x/3x/4x/10x / 100%，multiplier 2/3/4/10，vsync + override_present_mode + performance_mode）；extension 用 `LSFGVK_PROFILE` 選 profile（不需 active_in）。**⚠️ lsfg-vk GUI（Lossless Scaling app）存檔時會覆蓋此檔**——GUI 裡存過檔會把這 4 支 profile 清掉，要在 GUI 內重新加（或別在 GUI 存檔）；備份 `conf.toml.bak-btn4`（本次修前）、`conf.toml.bak-ext`、`conf.toml.bak-screenfg` |
 | `~/.local/share/vulkan/implicit_layer.d/` | lsfg-vk implicit layer（`VK_LAYER_LSFGVK_frame_generation`）位置；未 enumerate 到時 screen-fg 啟動警告 |
 | `~/.local/share/applications/screen-fg-gui.desktop` | GUI 桌面圖示（安裝方式見 `screen-fg-gui/AGENTS.md`） |
 
