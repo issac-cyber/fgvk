@@ -8,8 +8,8 @@ function setStatus(text) {
 async function launch(mult) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab && tab.url;
-  if (!isYouTubeWatchUrl(url)) {
-    setStatus("此頁不是 YouTube 影片");
+  if (!isVideoUrl(url)) {
+    setStatus("此頁非 http(s) 網頁");
     return;
   }
   const profile = multiplierToProfile(mult);

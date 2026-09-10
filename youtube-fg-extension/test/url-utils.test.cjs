@@ -1,17 +1,18 @@
 // test/url-utils.test.cjs
 const assert = require("assert");
-const { isYouTubeWatchUrl, multiplierToProfile } = require("../url-utils.js");
+const { isVideoUrl, multiplierToProfile } = require("../url-utils.js");
 
-// isYouTubeWatchUrl
-assert.strictEqual(isYouTubeWatchUrl("https://www.youtube.com/watch?v=abc"), true);
-assert.strictEqual(isYouTubeWatchUrl("https://youtube.com/watch?v=abc"), true);
-assert.strictEqual(isYouTubeWatchUrl("https://www.youtube.com/watch?v=abc&t=10"), true);
-assert.strictEqual(isYouTubeWatchUrl("https://www.youtube.com/"), false);
-assert.strictEqual(isYouTubeWatchUrl("https://www.youtube.com/results?search_query=x"), false);
-assert.strictEqual(isYouTubeWatchUrl("https://example.com/watch?v=abc"), false);
-assert.strictEqual(isYouTubeWatchUrl(""), false);
-assert.strictEqual(isYouTubeWatchUrl(null), false);
-assert.strictEqual(isYouTubeWatchUrl("not a url"), false);
+// isVideoUrl（放寬：任何 http(s) 網頁）
+assert.strictEqual(isVideoUrl("https://www.youtube.com/watch?v=abc"), true);
+assert.strictEqual(isVideoUrl("https://www.bilibili.com/video/BV1xx411c7mD"), true);
+assert.strictEqual(isVideoUrl("https://example.com/video.mp4"), true);
+assert.strictEqual(isVideoUrl("http://example.com/stream.m3u8"), true);
+assert.strictEqual(isVideoUrl("https://vimeo.com/123456"), true);
+assert.strictEqual(isVideoUrl("chrome://extensions"), false);
+assert.strictEqual(isVideoUrl("file:///tmp/a.mp4"), false);
+assert.strictEqual(isVideoUrl(""), false);
+assert.strictEqual(isVideoUrl(null), false);
+assert.strictEqual(isVideoUrl("not a url"), false);
 
 // multiplierToProfile
 assert.strictEqual(multiplierToProfile(2), "2x FG / 100%");

@@ -1,6 +1,6 @@
 # youtube-fg-extension
 
-**可用的 FG 路線**：Chrome extension + native messaging host，點一下就開 `mpv`（Vulkan）外部視窗 + `lsfg-vk` 插幀看 YouTube。瀏覽器本身不插幀（Chromium 內 FG 被 refresh cap 死，見頂層 AGENTS.md 現況）；本 extension 是把「可 work 的 mpv+lsfg-vk」包成一個可點的方案。
+**可用的 FG 路線**：Chrome extension + native messaging host，點一下就開 `mpv`（Vulkan）外部視窗 + `lsfg-vk` 插幀看**網頁影片**（YouTube / Bilibili / 任何 yt-dlp 支援的站；DRM 站會失敗）。瀏覽器本身不插幀（Chromium 內 FG 被 refresh cap 死，見頂層 AGENTS.md 現況）；本 extension 是把「可 work 的 mpv+lsfg-vk」包成一個可點的方案。mpv 靠 `yt-dlp`（已裝）自動解析串流站網址。
 
 ## 運作
 
@@ -14,7 +14,7 @@ popup 選 2x/3x/4x/10x → `chrome.runtime.connectNative("com.fgvk.host")` → h
 | `popup.html` / `popup.js` | 2x/3x/4x/10x 按鈕；連 native host；顯示最後一擊成功/失敗 |
 | `host/fgvk-mpv-launch.py` | native messaging host（讀 stdio length-prefixed message → `launch` 起 mpv → 回 status JSON）。`--selftest` 可離線驗 |
 | `host/com.fgvk.host.json` | host manifest（`path` 指向 `~/.local/bin/fgvk-mpv-launch.py`；`allowed_origins` = extension ID） |
-| `url-utils.js` | `isYouTubeWatchUrl` + `multiplierToProfile`（純函式，popup 與 host 同源語法） |
+| `url-utils.js` | `isVideoUrl` + `multiplierToProfile`（純函式，popup 與 host 同源語法；放寬：任何 http(s) 網頁皆可，mpv+yt-dlp 解析） |
 | `test/url-utils.test.cjs` | node 單元測試 |
 | `install.md` | 安裝步驟 |
 | `docs/superpowers/{specs,plans}/2026-09-10-youtube-fg-extension*.md` | 設計 spec + 實作 plan |

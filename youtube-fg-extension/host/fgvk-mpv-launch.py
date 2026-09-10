@@ -27,12 +27,8 @@ def build_argv(profile, url):
 
 
 def is_valid_video_url(url):
-    """Mirror of url-utils.js isYouTubeWatchUrl（watch / embed / youtu.be）。"""
-    return (
-        url.startswith("https://www.youtube.com/watch?")
-        or url.startswith("https://www.youtube.com/embed/")
-        or url.startswith("https://youtu.be/")
-    )
+    """Mirror of url-utils.js isVideoUrl — 任何 http(s) URL（mpv + yt-dlp 自動解析）。"""
+    return url.startswith("http://") or url.startswith("https://")
 
 
 def read_message():
@@ -76,7 +72,7 @@ def main():
         write_message({"ok": False, "error": f"倍率 {mult} 不支援（只接受 2/3/4/10）"})
         return 1
     if not is_valid_video_url(url):
-        write_message({"ok": False, "error": "不是 YouTube 影片網址"})
+        write_message({"ok": False, "error": "不是 http(s) 網址"})
         return 1
     try:
         launch(profile, url)
@@ -96,9 +92,10 @@ if __name__ == "__main__":
         assert multiplier_to_profile(5) is None
         assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "https://x"]
         assert is_valid_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        assert is_valid_video_url("https://youtu.be/dQw4w9WgXcQ")
-        assert is_valid_video_url("https://www.youtube.com/embed/dQw4w9WgXcQ")
-        assert not is_valid_video_url("https://example.com/watch?v=x")
+        assert is_valid_video_url("https://www.bilibili.com/video/BV1xx411c7mD")
+        assert is_valid_video_url("https://example.com/video.mp4")
+        assert not is_valid_video_url("chrome://extensions")
+        assert not is_valid_video_url("file:///tmp/a.mp4")
         print("host selftest passed")
         sys.exit(0)
     sys.exit(main())
