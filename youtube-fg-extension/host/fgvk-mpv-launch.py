@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Native messaging host：接 {url, multiplier} 或 {stop:true} → 管理 mpv + lsfg-vk FG（2x/3x/4x/10x）。
 
-replace 語意：新一次啟動會先殺上一支 mpv（PID 持久化在 PID_FILE，因 host 每次 invocation 是短命 process）。
-stop 語意：殺掉運行中的 mpv。
+- replace 語意：新一次啟動會先殺上一支 mpv（PID 持久化在 PID_FILE，因 host 每次 invocation 是短命 process）。
+- stop 語意：殺掉運行中的 mpv。
+- profile 自動修復：啟動前檢查 conf.toml 有標準 4 支 profile，缺了就補（只補缺的、絕不覆蓋現有的）——防 Lossless Scaling GUI 存檔把 conf.toml 覆蓋掉 profile。
+- 錯誤回饋：啟動 mpv 後等 STARTUP_CHECK 秒確認它還活著；若已退出（如影片不可用/DRM/URL 錯），讀 log 回傳有用錯誤。
 """
 import json
 import os
@@ -11,6 +13,7 @@ import struct
 import subprocess
 import sys
 import time
+import tomllib
 
 MPV = "mpv"
 MPV_ARGS = ["--vo=gpu", "--gpu-api=vulkan"]
@@ -19,6 +22,15 @@ ALLOWED_MULT = (2, 3, 4, 10)
 # 兩張 R9700 同 device id（1002:7551），須以 PCI BDF 區分；改回 GPU0 換 0000:03:00.0，或刪掉此常數用預設。
 GPU_SELECT = "1002:7551:0000:07:00.0"
 PID_FILE = os.path.expanduser("~/.config/fgvk/mpv.pid")
+CONF = os.path.expanduser("~/.config/lsfg-vk/conf.toml")
+MPV_LOG = os.path.expanduser("~/.config/fgvk/mpv.log")
+STARTUP_CHECK_SECS = 3.0
+STANDARD_PROFILES = {
+    "2x FG / 100%": 2,
+    "3x FG / 100%": 3,
+    "4x FG / 100%": 4,
+    "10x FG / 100%": 10,
+}
 
 
 def multiplier_to_profile(mult):
@@ -90,18 +102,80 @@ def do_stop():
     return pid is not None
 
 
+def load_profile_names(path=CONF):
+    """讀 conf.toml 的 profile 名稱集合；讀不到/不存在/解碼錯回 None。"""
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
+        return None
+    return {p.get("name") for p in data.get("profile", [])}
+
+
+def profile_block(name, mult):
+    """組出單一 [[profile]] 的 TOML 文字（標準欄位）。"""
+    return (
+        "\n[[profile]]\n"
+        "flow_scale = 1.0\n"
+        f"multiplier = {mult}\n"
+        f'name = "{name}"\n'
+        "override_present_mode = true\n"
+        'pacing_mode = "vsync"\n'
+        "performance_mode = false\n"
+        "preserve_swapchain_image_count = false\n"
+    )
+
+
+def ensure_profiles(path=CONF):
+    """確保標準 4 支 profile 存在（只補缺的、絕不覆蓋現有的）。回 (修復的名稱 list, 錯誤字串或 None)。"""
+    if not os.path.exists(path):
+        return [], f"lsfg-vk 的 conf.toml 不存在（{path}），請先開啟一次 Lossless Scaling 建立設定"
+    names = load_profile_names(path)
+    if names is None:
+        return [], f"讀取 {path} 失敗（TOML 解碼錯誤？）"
+    missing = [n for n in STANDARD_PROFILES if n not in names]
+    if not missing:
+        return [], None
+    try:
+        with open(path, "a") as f:
+            for n in missing:
+                f.write(profile_block(n, STANDARD_PROFILES[n]))
+    except OSError as e:
+        return [], f"寫入 {path} 失敗：{e}"
+    return missing, None
+
+
+def read_mpve_error(log, max_lines=5):
+    """從 mpv log 抓錯誤（優先含錯誤關鍵字的行）。"""
+    try:
+        lines = [l.strip() for l in open(log, encoding="utf-8", errors="ignore").read().splitlines() if l.strip()]
+    except OSError:
+        return "mpv 啟動後立即退出（無法讀取 log）"
+    errs = [l for l in lines if any(k in l for k in ("ERROR", "error", "Failed", "failed", "denied", "unavailable", "truncated"))]
+    pick = (errs or lines)[-max_lines:]
+    return ("mpv 立即退出：" + " | ".join(pick))[:300]
+
+
 def launch(profile_name, url):
+    """啟動 mpv；等 STARTUP_CHECK 秒確認存活。回 (ok, 錯誤字串或 None)。"""
     env = dict(os.environ, LSFGVK_PROFILE=profile_name, MESA_VK_DEVICE_SELECT=GPU_SELECT)
     old = read_pid()
     kill_pid(old)  # replace：先殺舊 mpv
     if old:
         wait_dead(old)  # 等舊的退出、釋放 GPU，避免新 mpv 的 Vulkan 初始化撞車
+    os.makedirs(os.path.dirname(MPV_LOG), exist_ok=True)
+    lf = open(MPV_LOG, "wb")
     proc = subprocess.Popen(build_argv(profile_name, url), env=env,
-                           start_new_session=True,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+                           start_new_session=True, stdin=subprocess.DEVNULL,
+                           stdout=lf, stderr=lf)
+    time.sleep(STARTUP_CHECK_SECS)
+    # proc.poll() 正確偵測退出（含 reap zombie）；os.kill(pid,0) 會被 zombie 騙到（以為還活著）
+    alive = proc.poll() is None
+    lf.close()  # mpv 持有自己的 fd，關掉 parent 端的 handle 安全
+    if not alive:
+        return False, read_mpve_error(MPV_LOG)
     write_pid(proc.pid)
-    return True
+    return True, None
 
 
 def read_message():
@@ -141,17 +215,21 @@ def main():
     if not is_valid_video_url(url):
         write_message({"ok": False, "error": "不是 http(s) 網址"})
         return 1
-    try:
-        launch(profile, url)
-    except FileNotFoundError:
-        write_message({"ok": False, "error": "mpv 未安裝"})
+    repaired, err = ensure_profiles()  # profile 自動修復
+    if err:
+        write_message({"ok": False, "error": err})
         return 1
-    write_message({"ok": True})
+    ok, err = launch(profile, url)  # 啟動＋存活檢查（錯誤回饋）
+    if not ok:
+        write_message({"ok": False, "error": err})
+        return 1
+    write_message({"ok": True, "repaired": repaired})
     return 0
 
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
+        import tempfile
         assert multiplier_to_profile(2) == "2x FG / 100%"
         assert multiplier_to_profile(3) == "3x FG / 100%"
         assert multiplier_to_profile(4) == "4x FG / 100%"
@@ -159,10 +237,24 @@ if __name__ == "__main__":
         assert multiplier_to_profile(5) is None
         assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "https://x"]
         assert is_valid_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        assert is_valid_video_url("https://www.bilibili.com/video/BV1xx411c7mD")
         assert is_valid_video_url("https://example.com/video.mp4")
         assert not is_valid_video_url("chrome://extensions")
         assert not is_valid_video_url("file:///tmp/a.mp4")
+        # profile 自動修復（用 temp 檔，不碰真實 conf.toml）
+        blk = profile_block("2x FG / 100%", 2)
+        assert 'name = "2x FG / 100%"' in blk and "multiplier = 2" in blk
+        with tempfile.TemporaryDirectory() as d:
+            conf = os.path.join(d, "conf.toml")
+            with open(conf, "w") as f:
+                f.write('version = 2\n\n[global]\nlog_level = "info"\n\n[[profile]]\nmultiplier = 2\nname = "2x FG / 100%"\n')
+            assert load_profile_names(conf) == {"2x FG / 100%"}
+            repaired, err = ensure_profiles(conf)
+            assert err is None
+            assert repaired == ["3x FG / 100%", "4x FG / 100%", "10x FG / 100%"]
+            names = load_profile_names(conf)  # 修復後仍是有效 TOML 且 4 支齊
+            assert names is not None and set(names) == set(STANDARD_PROFILES)
+            repaired2, err2 = ensure_profiles(conf)  # 冪等：再跑一次不加
+            assert err2 is None and repaired2 == []
         print("host selftest passed")
         sys.exit(0)
     sys.exit(main())

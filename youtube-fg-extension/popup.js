@@ -21,6 +21,14 @@ async function setVideoPlaying(tabId, playing) {
   } catch (e) {}
 }
 
+// 還原來源 tab：解除靜音＋恢復影片＋清除記錄（stop 與啟動失敗 rollback 共用）。
+async function restoreTab(tabId) {
+  if (tabId == null) return;
+  try { await chrome.tabs.update(tabId, { muted: false }); } catch (e) {}
+  await setVideoPlaying(tabId, true);
+  try { await chrome.storage.local.remove("mutedTabId"); } catch (e) {}
+}
+
 async function launch(mult) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab && tab.url;
@@ -39,25 +47,22 @@ async function launch(mult) {
   const profile = multiplierToProfile(mult);
   chrome.runtime.sendNativeMessage("com.fgvk.host", { url, multiplier: mult }, (resp) => {
     if (chrome.runtime.lastError) {
+      restoreTab(tab && tab.id);  // 連不上 host → 還原來源 tab
       setStatus("未安裝 host：" + chrome.runtime.lastError.message);
       return;
     }
     if (resp && resp.ok) {
       setStatus(`已啟動（${profile}）· 來源 tab 已靜音＋暫停`);
     } else {
+      restoreTab(tab && tab.id);  // 啟動失敗 → 還原來源 tab
       setStatus((resp && resp.error) || "啟動失敗");
     }
   });
 }
 
 async function stop() {
-  // 解除記住的 tab 靜音（還原來源音頻）
   const { mutedTabId } = await chrome.storage.local.get("mutedTabId");
-  if (mutedTabId != null) {
-    try { await chrome.tabs.update(mutedTabId, { muted: false }); } catch (e) {}
-    await setVideoPlaying(mutedTabId, true);
-    await chrome.storage.local.remove("mutedTabId");
-  }
+  await restoreTab(mutedTabId);  // 還原來源 tab（解除靜音＋恢復影片）
   chrome.runtime.sendNativeMessage("com.fgvk.host", { stop: true }, (resp) => {
     if (chrome.runtime.lastError) {
       setStatus("未安裝 host：" + chrome.runtime.lastError.message);
