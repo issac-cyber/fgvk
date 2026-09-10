@@ -6,15 +6,15 @@
 
 popup 選 2x/3x/4x/10x → `chrome.runtime.sendNativeMessage("com.fgvk.host", {url, multiplier})` → host `fgvk-mpv-launch.py` 發 `mpv --vo=gpu --gpu-api=vulkan <url>`，帶 `LSFGVK_PROFILE=<N>x FG / 100%` + `MESA_VK_DEVICE_SELECT=1002:7551:0000:07:00.0`（GPU1／第二張 R9700）。
 
-**音頻**：啟動時先靜音來源 tab（`chrome.tabs.update {muted:true}`，tab id 記在 `chrome.storage`）、mpv 播音（單一播放器，音畫同步最佳）。**視窗管理**：「停止」鈕 → `{stop:true}` 殺 mpv＋解除 tab 靜音；新一次啟動會先殺上一支 mpv（replace，mpv PID 持久化在 `~/.config/fgvk/mpv.pid`，含等舊的退出釋放 GPU）。後台 tab 不玩（省電）。
+**音頻**：啟動時先靜音來源 tab（`chrome.tabs.update {muted:true}`，tab id 記在 `chrome.storage`）、mpv 播音（單一播放器，音畫同步最佳）。**暫停來源影片**：啟動時用 `chrome.scripting`（靠 `activeTab`，點圖示即授予）把頁上 `<video>` `pause()`、停止時 `play()` 恢復（省串流/CPU、避免雙重畫面）。**視窗管理**：「停止」鈕 → `{stop:true}` 殺 mpv＋解除 tab 靜音＋恢復影片；新一次啟動會先殺上一支 mpv（replace，mpv PID 持久化在 `~/.config/fgvk/mpv.pid`，含等舊的退出釋放 GPU）。後台 tab 不玩（省電）。
 
 ## Key files
 
 | 檔案 | 用途 |
 |------|------|
-| `manifest.json` | MV3；`tabs` + `nativeMessaging` + `storage` 權限；`icons` + `action.default_icon`（像素小鴨） |
+| `manifest.json` | MV3；`tabs` + `nativeMessaging` + `storage` + `scripting` 權限；`icons` + `action.default_icon`（像素小鴨） |
 | `icons/` | extension 圖示（像素小鴨，16/32/48/128，透明背景） |
-| `popup.html` / `popup.js` | 2x/3x/4x/10x +「停止」鈕；啟動時靜音來源 tab、停止時解除；連 native host；顯示成功/失敗 |
+| `popup.html` / `popup.js` | 2x/3x/4x/10x +「停止」鈕；啟動時靜音來源 tab＋暫停 `<video>`、停止時解除＋恢復；連 native host；顯示成功/失敗 |
 | `host/fgvk-mpv-launch.py` | native messaging host（讀 stdio length-prefixed message → `launch`/`stop`；mpv PID 持久化在 `~/.config/fgvk/mpv.pid`；新啟動 replace 先殺舊的＋等舊的釋放 GPU）。`--selftest` 可離線驗 |
 | `host/com.fgvk.host.json` | host manifest（`path` 指向 `~/.local/bin/fgvk-mpv-launch.py`；`allowed_origins` = extension ID） |
 | `url-utils.js` | `isVideoUrl` + `multiplierToProfile`（純函式，popup 與 host 同源語法；放寬：任何 http(s) 網頁皆可，mpv+yt-dlp 解析） |
