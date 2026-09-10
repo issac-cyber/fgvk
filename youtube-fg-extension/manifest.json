@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube FG (mpv)",
+  "version": "0.1.0",
+  "description": "一鍵把 YouTube 影片送到 mpv 補幀（lsfg-vk 2x/3x/4x）",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["tabs", "nativeMessaging"],
+  "host_permissions": ["https://www.youtube.com/*"]
+}

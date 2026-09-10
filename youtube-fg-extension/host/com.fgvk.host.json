@@ -1,0 +1,9 @@
+{
+  "name": "com.fgvk.host",
+  "description": "Launch MPV with lsfg-vk frame generation",
+  "path": "/home/issac/.local/bin/fgvk-mpv-launch.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://<EXTENSION_ID>/"
+  ]
+}
