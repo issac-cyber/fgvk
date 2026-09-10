@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 MPV = "mpv"
-MPV_ARGS = ["--vo=gpu", "--gpu-api=vulkan", "--mute=yes"]
+MPV_ARGS = ["--vo=gpu", "--gpu-api=vulkan"]
 ALLOWED_MULT = (2, 3, 4, 10)
 # 強制用第二張 R9700（Vulkan 的 GPU1，PCI 0000:07:00.0）。兩張 R9700 同 device id（1002:7551），
 # 要用 PCI BDF 區分；要改回 GPU0 就換成 0000:03:00.0，或整個刪掉本常數走預設。
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         assert multiplier_to_profile(4) == "4x FG / 100%"
         assert multiplier_to_profile(10) == "10x FG / 100%"
         assert multiplier_to_profile(5) is None
-        assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "--mute=yes", "https://x"]
+        assert build_argv("3x FG / 100%", "https://x") == ["mpv", "--vo=gpu", "--gpu-api=vulkan", "https://x"]
         assert is_valid_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         assert is_valid_video_url("https://www.bilibili.com/video/BV1xx411c7mD")
         assert is_valid_video_url("https://example.com/video.mp4")
