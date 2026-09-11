@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=screen-fg
-Name[zh_TW]=screen-fg 插帧控制
-Comment=screen-fg 插帧 GUI 控制器
-Exec=env SCREENFG_BIN=/home/issac/公共/fgvk/screen-fg/build/screen-fg screen-fg-gui
-Icon=video-display
-Terminal=false
-Categories=AudioVideo;Video;
