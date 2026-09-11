@@ -24,7 +24,7 @@ fg（frame generation）專案：**影片的即時插幀**（本機個人用）�
 | `specs/` | 兩份 spec + 設計史。`screen-fg-pipeline/`：`spec.md` + `map.md` + `issues/`（研究筆記 01–03、spec lock 記錄 04、shader container 05；**無獨立 `research/`**）；`screen-fg-gui/`：`spec.md` + `map.md` + `issues/`（01–04）+ `research/`（01–02） |
 | `docs/` | 設計/建置計畫記錄（dated record，例 `superpowers/plans/2026-09-09-build-fgvk-from-zero.md`；不改寫歷史） |
 | `explainer.html` | 專案解說頁（standalone HTML，與 AGENTS.md 平行的溝通文件） |
-| `youtube-fg-extension/` | **可用的 FG 路線**（Chrome extension + native messaging host）：popup 2x/3x/4x/10x → host `fgvk-mpv-launch.py` → `mpv --vo=gpu --gpu-api=vulkan` + `LSFGVK_PROFILE` + `MESA_VK_DEVICE_SELECT`（GPU1）。見 `youtube-fg-extension/AGENTS.md` |
+| `youtube-fg-extension/` | **可用的 FG 路線**（Chrome extension + native messaging host）：popup 2x/3x/4x/10x → host `fgvk-mpv-launch.py` → `mpv --vo=gpu --gpu-api=vulkan` + `LSFGVK_PROFILE` + `MESA_VK_DEVICE_SELECT`（GPU1）；background service worker 監控 mpv、mpv 被關掉自動還原來源 tab；支援 **anime1.me**（host `resolve_anime1` 兩段 API＋Cookie、mpv 帶 `--http-header-fields=Cookie:`）＋ **hanime1.me**（host `resolve_hanime1` 直取 `<source>` 最高畫質 MP4，不 gate）——皆因 yt-dlp 解析不了/無 extractor。見 `youtube-fg-extension/AGENTS.md` |
 
 各組件的建置 / 操作 / 陷阱全在**它自己的 `AGENTS.md`**（本檔只索引＋跨組件合約，不重複）。
 
