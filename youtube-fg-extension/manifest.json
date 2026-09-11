@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FG (mpv)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "一鍵把網頁影片送到 mpv 補幀（lsfg-vk 2x/3x/4x/10x；mpv+yt-dlp 支援 YouTube/Bilibili 等站）",
   "icons": {
     "16": "icons/icon16.png",
@@ -18,5 +18,9 @@
       "128": "icons/icon128.png"
     }
   },
-  "permissions": ["tabs", "nativeMessaging", "storage", "scripting"]
+  "permissions": ["tabs", "nativeMessaging", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  }
 }

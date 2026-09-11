@@ -53,6 +53,8 @@ async function launch(mult) {
     }
     if (resp && resp.ok) {
       setStatus(`已啟動（${profile}）· 來源 tab 已靜音＋暫停`);
+      // 通知 background worker 開啟 mpv 存活監控（關 mpv 窗自動還原 tab）
+      chrome.runtime.sendMessage({ type: "mpv_started" }).catch(() => {});
     } else {
       restoreTab(tab && tab.id);  // 啟動失敗 → 還原來源 tab
       setStatus((resp && resp.error) || "啟動失敗");
@@ -70,6 +72,8 @@ async function stop() {
     }
     setStatus(resp && resp.ok ? "已停止" : "停止失敗");
   });
+  // 通知 worker 關閉監控（mpv 已被主動停止，不用再等它退出）
+  chrome.runtime.sendMessage({ type: "mpv_stopped" }).catch(() => {});
 }
 
 document.querySelectorAll("button[data-mult]").forEach((btn) => {

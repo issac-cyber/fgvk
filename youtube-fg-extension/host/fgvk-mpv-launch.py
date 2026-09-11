@@ -8,6 +8,7 @@
 """
 import json
 import os
+import select
 import signal
 import struct
 import subprocess
@@ -40,14 +41,82 @@ def multiplier_to_profile(mult):
     return f"{mult}x FG / 100%"
 
 
-def build_argv(profile, url):
-    """組出 mpv 啟動命令（argv list）。"""
-    return [MPV, *MPV_ARGS, url]
+def build_argv(profile, url, extra_args=None):
+    """組出 mpv 啟動命令（argv list）。extra_args 是 site-specific 的附加參數（如 anime1.me 的 Cookie header）。"""
+    return [MPV, *MPV_ARGS, *(extra_args or []), url]
 
 
 def is_valid_video_url(url):
     """mirror url-utils.js isVideoUrl——任何 http(s) URL（mpv + yt-dlp 自動解析）。"""
     return url.startswith("http://") or url.startswith("https://")
+
+
+def resolve_anime1(url):
+    """anime1.me 頁面 → (直接 MP4 src, Cookie header 值)。yt-dlp 解析不了此站，走兩段 API＋Cookie。
+    1) GET 集數頁抓 <video data-apireq>；2) POST v.anime1.me/api（d=apireq）拿 src＋3 支 Cookie；
+    3) MP4 需帶那 3 支 Cookie（nginx 驗證），media host 會輪轉（muan/miru/...），用 API 回的 src。"""
+    import re
+    import http.cookiejar
+    import urllib.parse
+    import urllib.request
+    ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
+
+    def get(opener, u, headers=None, data=None):
+        return opener.open(urllib.request.Request(u, headers={**ua, **(headers or {})}, data=data), timeout=30)
+
+    m = re.search(r"anime1\.me/(\d+)", url) or re.search(r"anime1\.me/\?p=(\d+)", url)
+    if m:
+        page = f"https://anime1.me/{m.group(1)}"
+    else:
+        m = re.search(r"anime1\.me/\?cat=(\d+)", url)
+        if not m:
+            raise RuntimeError("無法辨認的 anime1.me URL（需 /postid、?p= 或 ?cat=）")
+        cj0 = http.cookiejar.CookieJar()
+        op0 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj0))
+        html = get(op0, f"https://anime1.me/?cat={m.group(1)}").read().decode("utf-8", "replace")
+        first = re.search(r'<a[^>]*href="https://anime1\.me/(\d+)"', html)
+        if not first:
+            raise RuntimeError("season 頁找不到任何集數")
+        page = f"https://anime1.me/{first.group(1)}"
+
+    cj = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    html = get(op, page).read().decode("utf-8", "replace")
+    m = re.search(r'data-apireq="([^"]+)"', html)
+    if not m:
+        raise RuntimeError("頁面沒有影片（找不到 data-apireq）")
+    apireq = urllib.parse.unquote(m.group(1))
+    body = json.loads(get(
+        op, "https://v.anime1.me/api",
+        {"Content-Type": "application/x-www-form-urlencoded", "Origin": "https://anime1.me", "Referer": page},
+        urllib.parse.urlencode({"d": apireq}).encode()).read().decode())
+    src = body["s"][0]["src"]
+    if not src.startswith("http"):
+        src = "https:" + src
+    cookie = "; ".join(f"{c.name}={c.value}" for c in cj)
+    return src, cookie
+
+
+def resolve_hanime1(url):
+    """hanime1.me watch 頁 → 最高畫質直接 MP4 src。yt-dlp 無此站 extractor；
+    <source> tag 直接 MP4（vdownload.hembed.com/{id}-{quality}p.mp4?secure=...），不 gate（plain GET 即可）。"""
+    import re
+    import urllib.request
+    ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
+    m = re.search(r"hanime1\.me/watch\?v=(\d+)", url)
+    if not m:
+        raise RuntimeError("無法辨認的 hanime1.me URL（需 /watch?v=<id>）")
+    req = urllib.request.Request(f"https://hanime1.me/watch?v={m.group(1)}", headers=ua)
+    html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    srcs = re.findall(r'<source[^>]*src="(https?://[^"]*\.mp4[^"]*)"', html)
+    if not srcs:
+        raise RuntimeError("頁面沒有影片（找不到 <source> MP4）")
+
+    def quality(s):
+        mm = re.search(r"-(\d+)p\.mp4", s)
+        return int(mm.group(1)) if mm else 0
+
+    return max(srcs, key=quality)
 
 
 def read_pid():
@@ -156,7 +225,7 @@ def read_mpve_error(log, max_lines=5):
     return ("mpv 立即退出：" + " | ".join(pick))[:300]
 
 
-def launch(profile_name, url):
+def launch(profile_name, url, extra_args=None):
     """啟動 mpv；等 STARTUP_CHECK 秒確認存活。回 (ok, 錯誤字串或 None)。"""
     env = dict(os.environ, LSFGVK_PROFILE=profile_name, MESA_VK_DEVICE_SELECT=GPU_SELECT)
     old = read_pid()
@@ -165,7 +234,7 @@ def launch(profile_name, url):
         wait_dead(old)  # 等舊的退出、釋放 GPU，避免新 mpv 的 Vulkan 初始化撞車
     os.makedirs(os.path.dirname(MPV_LOG), exist_ok=True)
     lf = open(MPV_LOG, "wb")
-    proc = subprocess.Popen(build_argv(profile_name, url), env=env,
+    proc = subprocess.Popen(build_argv(profile_name, url, extra_args), env=env,
                            start_new_session=True, stdin=subprocess.DEVNULL,
                            stdout=lf, stderr=lf)
     time.sleep(STARTUP_CHECK_SECS)
@@ -195,6 +264,34 @@ def write_message(obj):
     sys.stdout.buffer.flush()
 
 
+def monitor_loop():
+    """connectNative port 模式：常駐監控 mpv 存活（每 ~1s），mpv 從運行→退出（使用者手動關窗）時 push {event:mpv_exited}。
+    只讀 PID_FILE（read_pid 只驗證、不殺），不與 launch/stop 的 host 衝突。"""
+    last_pid = None
+    while True:
+        cur = read_pid()
+        if last_pid is not None and cur is None:
+            write_message({"event": "mpv_exited"})
+            last_pid = None
+        if cur is not None:
+            last_pid = cur
+        try:
+            r, _, _ = select.select([sys.stdin], [], [], 1.0)
+        except OSError:
+            break
+        if r:
+            raw = sys.stdin.buffer.read(4)
+            if len(raw) < 4:
+                break  # port 斷開（worker 關閉 / Chrome 關）
+            (length,) = struct.unpack("<I", raw)
+            try:
+                msg = json.loads(sys.stdin.buffer.read(length).decode("utf-8"))
+            except Exception:
+                continue
+            if msg.get("stop"):
+                write_message({"ok": True, "stopped": do_stop()})
+
+
 def main():
     try:
         msg = read_message()
@@ -202,6 +299,9 @@ def main():
         write_message({"ok": False, "error": f"訊息解析失敗: {e}"})
         return 1
     if msg is None:
+        return 0
+    if msg.get("monitor"):
+        monitor_loop()
         return 0
     if msg.get("stop"):
         write_message({"ok": True, "stopped": do_stop()})
@@ -215,11 +315,26 @@ def main():
     if not is_valid_video_url(url):
         write_message({"ok": False, "error": "不是 http(s) 網址"})
         return 1
+    extra_args = []
+    # 注意：hanime1.me 的域名「包含」anime1.me 子字串，須先查 hanime1（if/elif 互斥）
+    if "hanime1.me" in url:  # site-specific：yt-dlp 無 extractor，<source> 直接 MP4（不 gate）
+        try:
+            url = resolve_hanime1(url)
+        except Exception as e:
+            write_message({"ok": False, "error": f"hanime1.me 解析失敗：{e}"})
+            return 1
+    elif "anime1.me" in url:  # site-specific：yt-dlp 解析不了，走兩段 API＋Cookie
+        try:
+            url, cookie = resolve_anime1(url)
+            extra_args = ["--http-header-fields=Cookie: " + cookie]
+        except Exception as e:
+            write_message({"ok": False, "error": f"anime1.me 解析失敗：{e}"})
+            return 1
     repaired, err = ensure_profiles()  # profile 自動修復
     if err:
         write_message({"ok": False, "error": err})
         return 1
-    ok, err = launch(profile, url)  # 啟動＋存活檢查（錯誤回饋）
+    ok, err = launch(profile, url, extra_args)  # 啟動＋存活檢查（錯誤回饋）
     if not ok:
         write_message({"ok": False, "error": err})
         return 1
