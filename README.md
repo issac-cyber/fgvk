@@ -24,8 +24,6 @@ So the working route wraps that known-good `mpv + lsfg-vk` combination in a one-
 3. `mpv` presents through the vsync-paced swapchain; the `lsfg-vk` layer intercepts the presents and inserts the generated frames.
 4. The extension mutes the source browser tab and pauses its `<video>` (mpv plays the audio — single player, best A/V sync). A background service worker monitors `mpv` and, when you close the window or hit Stop, un-mutes + resumes the tab so the audio comes back automatically.
 
-It also supports `anime1.me` and `hanime1.me` (which yt-dlp can't resolve) via site-specific resolvers in the native host.
-
 ## What to install
 
 **Target machine:** Ubuntu 26.04 · GNOME Wayland · 2× AMD R9700 (each driving a 3440×1440 display). The GPU is pinned to GPU1 via `MESA_VK_DEVICE_SELECT`.
